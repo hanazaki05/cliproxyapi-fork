@@ -137,7 +137,7 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) []
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	// Read priority from auth file.
+	// Read priority from auth file (per-credential override takes precedence).
 	if rawPriority, ok := metadata["priority"]; ok {
 		switch v := rawPriority.(type) {
 		case float64:
@@ -147,6 +147,12 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) []
 			if _, errAtoi := strconv.Atoi(priority); errAtoi == nil {
 				a.Attributes["priority"] = priority
 			}
+		}
+	} else if cfg != nil && len(cfg.OAuthDefaultPriority) > 0 {
+		// Fall back to config-level oauth-default-priority when the credential
+		// file does not specify its own priority.
+		if dp, exists := cfg.OAuthDefaultPriority[provider]; exists {
+			a.Attributes["priority"] = strconv.Itoa(dp)
 		}
 	}
 	// Read note from auth file.

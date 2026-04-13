@@ -126,6 +126,12 @@ type Config struct {
 	// OAuthExcludedModels defines per-provider global model exclusions applied to OAuth/file-backed auth entries.
 	OAuthExcludedModels map[string][]string `yaml:"oauth-excluded-models,omitempty" json:"oauth-excluded-models,omitempty"`
 
+	// OAuthDefaultPriority defines per-provider default priority for OAuth/file-backed auth entries.
+	// This sets a baseline priority for all OAuth credentials of a given provider unless
+	// the individual credential JSON file specifies its own "priority" field (which takes precedence).
+	// Example: codex: 5
+	OAuthDefaultPriority map[string]int `yaml:"oauth-default-priority,omitempty" json:"oauth-default-priority,omitempty"`
+
 	// OAuthModelAlias defines global model name aliases for OAuth/file-backed auth channels.
 	// These aliases affect both model listing and model routing for supported channels:
 	// gemini-cli, vertex, aistudio, antigravity, claude, codex, qwen, iflow.
