@@ -376,6 +376,21 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 		helps.RecordAPIResponseError(ctx, e.cfg, err)
 		return resp, err
 	}
+	// Detect upstream responses that are not valid compact JSON (e.g. HTML
+	// management panels from providers that don't support /responses/compact).
+	// Treat them as 502 so the conductor retries with the next credential.
+	if len(data) > 0 && !gjson.ValidBytes(data) {
+		helps.AppendAPIResponseChunk(ctx, e.cfg, data)
+		helps.LogWithRequestID(ctx).Debugf("compact: upstream returned non-JSON body (%d bytes), treating as 502", len(data))
+		return resp, newCodexStatusErr(http.StatusBadGateway, []byte(`{"error":{"message":"upstream returned non-JSON response for compact","type":"server_error"}}`))
+	}
+	// Also catch JSON error responses that the upstream returns with 200 status
+	// (e.g. new-api proxies returning {"error":{...}} with HTTP 200).
+	if errField := gjson.GetBytes(data, "error"); errField.Exists() {
+		helps.AppendAPIResponseChunk(ctx, e.cfg, data)
+		helps.LogWithRequestID(ctx).Debugf("compact: upstream returned error in 200 body: %s", errField.Raw)
+		return resp, newCodexStatusErr(http.StatusBadGateway, data)
+	}
 	helps.AppendAPIResponseChunk(ctx, e.cfg, data)
 	reporter.Publish(ctx, helps.ParseOpenAIUsage(data))
 	reporter.EnsurePublished(ctx)
@@ -774,6 +789,9 @@ func applyCodexHeaders(r *http.Request, auth *cliproxyauth.Auth, token string, s
 
 	if stream {
 		r.Header.Set("Accept", "text/event-stream")
+		// SSE streams must not be compressed: the downstream scanner reads
+		// line-delimited text and cannot parse compressed bytes.
+		r.Header.Set("Accept-Encoding", "identity")
 	} else {
 		r.Header.Set("Accept", "application/json")
 	}
@@ -802,6 +820,11 @@ func applyCodexHeaders(r *http.Request, auth *cliproxyauth.Auth, token string, s
 		attrs = auth.Attributes
 	}
 	util.ApplyCustomHeadersFromAttrs(r, attrs)
+	// Re-enforce Accept-Encoding: identity after ApplyCustomHeadersFromAttrs,
+	// which may override it. Compressed SSE breaks the line scanner.
+	if stream {
+		r.Header.Set("Accept-Encoding", "identity")
+	}
 }
 
 func newCodexStatusErr(statusCode int, body []byte) statusErr {
