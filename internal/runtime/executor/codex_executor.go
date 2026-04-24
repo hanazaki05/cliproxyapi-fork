@@ -26,6 +26,7 @@ import (
 	"github.com/tiktoken-go/tokenizer"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 )
 
 const (
@@ -726,12 +727,54 @@ func (e *CodexExecutor) Refresh(ctx context.Context, auth *cliproxyauth.Auth) (*
 }
 
 func (e *CodexExecutor) cacheHelper(ctx context.Context, opts cliproxyexecutor.Options, from sdktranslator.Format, url string, req cliproxyexecutor.Request, rawJSON []byte) ([]byte, *http.Request, error) {
+	if !codexRequestAlignEnabled(e.cfg) {
+		return e.legacyCacheHelper(ctx, from, url, req, rawJSON)
+	}
 	requestState, rawJSON := prepareCodexRequestState(ctx, opts, from, req, rawJSON)
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(rawJSON))
 	if err != nil {
 		return nil, nil, err
 	}
 	applyCodexRequestStateHeaders(httpReq.Header, requestState)
+	return rawJSON, httpReq, nil
+}
+
+func (e *CodexExecutor) legacyCacheHelper(ctx context.Context, from sdktranslator.Format, url string, req cliproxyexecutor.Request, rawJSON []byte) ([]byte, *http.Request, error) {
+	var cache helps.CodexCache
+	if from == "claude" {
+		userIDResult := gjson.GetBytes(req.Payload, "metadata.user_id")
+		if userIDResult.Exists() {
+			key := fmt.Sprintf("%s-%s", req.Model, userIDResult.String())
+			var ok bool
+			if cache, ok = helps.GetCodexCache(key); !ok {
+				cache = helps.CodexCache{
+					ID:     uuid.New().String(),
+					Expire: time.Now().Add(1 * time.Hour),
+				}
+				helps.SetCodexCache(key, cache)
+			}
+		}
+	} else if from == "openai-response" {
+		promptCacheKey := gjson.GetBytes(req.Payload, "prompt_cache_key")
+		if promptCacheKey.Exists() {
+			cache.ID = promptCacheKey.String()
+		}
+	} else if from == "openai" {
+		if apiKey := strings.TrimSpace(helps.APIKeyFromContext(ctx)); apiKey != "" {
+			cache.ID = uuid.NewSHA1(uuid.NameSpaceOID, []byte("cli-proxy-api:codex:prompt-cache:"+apiKey)).String()
+		}
+	}
+
+	if cache.ID != "" {
+		rawJSON, _ = sjson.SetBytes(rawJSON, "prompt_cache_key", cache.ID)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(rawJSON))
+	if err != nil {
+		return nil, nil, err
+	}
+	if cache.ID != "" {
+		httpReq.Header.Set("Session_id", cache.ID)
+	}
 	return rawJSON, httpReq, nil
 }
 
@@ -748,16 +791,20 @@ func applyCodexHeaders(r *http.Request, auth *cliproxyauth.Auth, token string, s
 		r.Header.Set("X-Codex-Beta-Features", ginHeaders.Get("X-Codex-Beta-Features"))
 	}
 	misc.EnsureHeader(r.Header, ginHeaders, "Version", "")
-	misc.EnsureHeader(r.Header, ginHeaders, "X-Codex-Turn-State", "")
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Codex-Turn-Metadata", "")
 	misc.EnsureHeader(r.Header, ginHeaders, "X-Client-Request-Id", "")
-	misc.EnsureHeader(r.Header, ginHeaders, "X-Codex-Installation-Id", "")
-	misc.EnsureHeader(r.Header, ginHeaders, "X-Codex-Window-Id", "")
-	misc.EnsureHeader(r.Header, ginHeaders, "X-OpenAI-Subagent", "")
 	cfgUserAgent, _ := codexHeaderDefaults(cfg, auth)
 	ensureHeaderWithConfigPrecedence(r.Header, ginHeaders, "User-Agent", cfgUserAgent, codexUserAgent)
 
-	ensureCodexConversationTurnHeaders(r.Header, ginHeaders)
+	if codexRequestAlignEnabled(cfg) {
+		misc.EnsureHeader(r.Header, ginHeaders, "X-Codex-Turn-State", "")
+		misc.EnsureHeader(r.Header, ginHeaders, "X-Codex-Installation-Id", "")
+		misc.EnsureHeader(r.Header, ginHeaders, "X-Codex-Window-Id", "")
+		misc.EnsureHeader(r.Header, ginHeaders, "X-OpenAI-Subagent", "")
+		ensureCodexConversationTurnHeaders(r.Header, ginHeaders)
+	} else if strings.Contains(r.Header.Get("User-Agent"), "Mac OS") {
+		misc.EnsureHeader(r.Header, ginHeaders, "Session_id", uuid.NewString())
+	}
 
 	if stream {
 		r.Header.Set("Accept", "text/event-stream")

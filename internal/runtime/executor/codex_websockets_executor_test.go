@@ -47,14 +47,14 @@ func TestApplyCodexWebsocketHeadersDefaultsToCurrentResponsesBeta(t *testing.T) 
 	if got := headers.Get("x-codex-beta-features"); got != "" {
 		t.Fatalf("x-codex-beta-features = %q, want empty", got)
 	}
-	if got := headers.Get("Session_id"); got == "" {
-		t.Fatal("Session_id is empty")
+	if got := headers.Get("Session_id"); got != "" {
+		t.Fatalf("Session_id = %q, want empty", got)
 	}
-	if got := headers.Get("X-Codex-Turn-Metadata"); !gjson.Valid(got) {
-		t.Fatalf("X-Codex-Turn-Metadata = %q, want valid JSON", got)
+	if got := headers.Get("X-Codex-Turn-Metadata"); got != "" {
+		t.Fatalf("X-Codex-Turn-Metadata = %q, want empty", got)
 	}
-	if got := headers.Get("X-Client-Request-Id"); got == "" {
-		t.Fatal("X-Client-Request-Id is empty")
+	if got := headers.Get("X-Client-Request-Id"); got != "" {
+		t.Fatalf("X-Client-Request-Id = %q, want empty", got)
 	}
 }
 
@@ -82,14 +82,47 @@ func TestApplyCodexWebsocketHeadersPassesThroughClientIdentityHeaders(t *testing
 	if got := headers.Get("Version"); got != "0.115.0-alpha.27" {
 		t.Fatalf("Version = %s, want %s", got, "0.115.0-alpha.27")
 	}
-	if got := gjson.Get(headers.Get("X-Codex-Turn-Metadata"), "turn_id").String(); got != "turn-1" {
-		t.Fatalf("turn_id = %s, want turn-1", got)
+	if got := headers.Get("X-Codex-Turn-Metadata"); got != `{"turn_id":"turn-1"}` {
+		t.Fatalf("X-Codex-Turn-Metadata = %s, want %s", got, `{"turn_id":"turn-1"}`)
 	}
 	if got := headers.Get("X-Client-Request-Id"); got != "019d2233-e240-7162-992d-38df0a2a0e0d" {
 		t.Fatalf("X-Client-Request-Id = %s, want %s", got, "019d2233-e240-7162-992d-38df0a2a0e0d")
 	}
+	if got := headers.Get("Session_id"); got != "" {
+		t.Fatalf("Session_id = %s, want empty", got)
+	}
+	if got := headers.Get("X-Codex-Turn-State"); got != "" {
+		t.Fatalf("X-Codex-Turn-State = %s, want empty", got)
+	}
+	if got := headers.Get("X-Codex-Installation-Id"); got != "" {
+		t.Fatalf("X-Codex-Installation-Id = %s, want empty", got)
+	}
+	if got := headers.Get("X-Codex-Window-Id"); got != "" {
+		t.Fatalf("X-Codex-Window-Id = %s, want empty", got)
+	}
+	if got := headers.Get("X-OpenAI-Subagent"); got != "" {
+		t.Fatalf("X-OpenAI-Subagent = %s, want empty", got)
+	}
+}
+
+func TestApplyCodexWebsocketHeadersRequestAlignCodexPassesCodexState(t *testing.T) {
+	auth := &cliproxyauth.Auth{Provider: "codex", Metadata: map[string]any{"email": "user@example.com"}}
+	ctx := contextWithGinHeaders(map[string]string{
+		"X-Codex-Turn-State":      "state-1",
+		"X-Codex-Turn-Metadata":   `{"turn_id":"turn-1"}`,
+		"X-Client-Request-Id":     "019d2233-e240-7162-992d-38df0a2a0e0d",
+		"X-Codex-Installation-Id": "install-1",
+		"X-Codex-Window-Id":       "window-1",
+		"X-OpenAI-Subagent":       "review",
+	})
+
+	headers := applyCodexWebsocketHeaders(ctx, http.Header{}, auth, "", &config.Config{RequestAlignCodex: true})
+
 	if got := headers.Get("Session_id"); got != "019d2233-e240-7162-992d-38df0a2a0e0d" {
 		t.Fatalf("Session_id = %s, want request id", got)
+	}
+	if got := gjson.Get(headers.Get("X-Codex-Turn-Metadata"), "turn_id").String(); got != "turn-1" {
+		t.Fatalf("turn_id = %s, want turn-1", got)
 	}
 	if got := headers.Get("X-Codex-Turn-State"); got != "state-1" {
 		t.Fatalf("X-Codex-Turn-State = %s, want state-1", got)
@@ -264,14 +297,51 @@ func TestApplyCodexHeadersPassesThroughClientIdentityHeaders(t *testing.T) {
 	if got := req.Header.Get("Version"); got != "0.115.0-alpha.27" {
 		t.Fatalf("Version = %s, want %s", got, "0.115.0-alpha.27")
 	}
-	if got := gjson.Get(req.Header.Get("X-Codex-Turn-Metadata"), "turn_id").String(); got != "turn-1" {
-		t.Fatalf("turn_id = %s, want turn-1", got)
+	if got := req.Header.Get("X-Codex-Turn-Metadata"); got != `{"turn_id":"turn-1"}` {
+		t.Fatalf("X-Codex-Turn-Metadata = %s, want %s", got, `{"turn_id":"turn-1"}`)
 	}
 	if got := req.Header.Get("X-Client-Request-Id"); got != "019d2233-e240-7162-992d-38df0a2a0e0d" {
 		t.Fatalf("X-Client-Request-Id = %s, want %s", got, "019d2233-e240-7162-992d-38df0a2a0e0d")
 	}
+	if got := req.Header.Get("Session_id"); got == "" {
+		t.Fatal("Session_id is empty")
+	}
+	if got := req.Header.Get("X-Codex-Turn-State"); got != "" {
+		t.Fatalf("X-Codex-Turn-State = %s, want empty", got)
+	}
+	if got := req.Header.Get("X-Codex-Installation-Id"); got != "" {
+		t.Fatalf("X-Codex-Installation-Id = %s, want empty", got)
+	}
+	if got := req.Header.Get("X-Codex-Window-Id"); got != "" {
+		t.Fatalf("X-Codex-Window-Id = %s, want empty", got)
+	}
+	if got := req.Header.Get("X-OpenAI-Subagent"); got != "" {
+		t.Fatalf("X-OpenAI-Subagent = %s, want empty", got)
+	}
+}
+
+func TestApplyCodexHeadersRequestAlignCodexPassesCodexState(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "https://example.com/responses", nil)
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+	auth := &cliproxyauth.Auth{Provider: "codex", Metadata: map[string]any{"email": "user@example.com"}}
+	req = req.WithContext(contextWithGinHeaders(map[string]string{
+		"X-Codex-Turn-State":      "state-1",
+		"X-Codex-Turn-Metadata":   `{"turn_id":"turn-1"}`,
+		"X-Client-Request-Id":     "019d2233-e240-7162-992d-38df0a2a0e0d",
+		"X-Codex-Installation-Id": "install-1",
+		"X-Codex-Window-Id":       "window-1",
+		"X-OpenAI-Subagent":       "review",
+	}))
+
+	applyCodexHeaders(req, auth, "oauth-token", true, &config.Config{RequestAlignCodex: true})
+
 	if got := req.Header.Get("Session_id"); got != "019d2233-e240-7162-992d-38df0a2a0e0d" {
 		t.Fatalf("Session_id = %s, want request id", got)
+	}
+	if got := gjson.Get(req.Header.Get("X-Codex-Turn-Metadata"), "turn_id").String(); got != "turn-1" {
+		t.Fatalf("turn_id = %s, want turn-1", got)
 	}
 	if got := req.Header.Get("X-Codex-Turn-State"); got != "state-1" {
 		t.Fatalf("X-Codex-Turn-State = %s, want state-1", got)
@@ -287,13 +357,32 @@ func TestApplyCodexHeadersPassesThroughClientIdentityHeaders(t *testing.T) {
 	}
 }
 
-func TestApplyCodexHeadersInjectsCodexRequestStateByDefault(t *testing.T) {
+func TestApplyCodexHeadersDoesNotInjectCodexRequestStateByDefault(t *testing.T) {
 	req, err := http.NewRequest(http.MethodPost, "https://example.com/responses", nil)
 	if err != nil {
 		t.Fatalf("NewRequest() error = %v", err)
 	}
 
 	applyCodexHeaders(req, nil, "oauth-token", true, nil)
+
+	if got := req.Header.Get("Session_id"); got == "" {
+		t.Fatal("Session_id is empty")
+	}
+	if got := req.Header.Get("X-Client-Request-Id"); got != "" {
+		t.Fatalf("X-Client-Request-Id = %q, want empty", got)
+	}
+	if got := req.Header.Get("X-Codex-Turn-Metadata"); got != "" {
+		t.Fatalf("X-Codex-Turn-Metadata = %q, want empty", got)
+	}
+}
+
+func TestApplyCodexHeadersRequestAlignCodexInjectsCodexRequestState(t *testing.T) {
+	req, err := http.NewRequest(http.MethodPost, "https://example.com/responses", nil)
+	if err != nil {
+		t.Fatalf("NewRequest() error = %v", err)
+	}
+
+	applyCodexHeaders(req, nil, "oauth-token", true, &config.Config{RequestAlignCodex: true})
 
 	if got := req.Header.Get("Session_id"); got == "" {
 		t.Fatal("Session_id is empty")

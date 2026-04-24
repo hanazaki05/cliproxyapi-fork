@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/router-for-me/CLIProxyAPI/v6/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v6/internal/runtime/executor/helps"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v6/sdk/cliproxy/executor"
 	sdktranslator "github.com/router-for-me/CLIProxyAPI/v6/sdk/translator"
@@ -308,4 +309,8 @@ func firstNonEmptyHeader(headers http.Header, name, fallback string) string {
 		return value
 	}
 	return strings.TrimSpace(fallback)
+}
+
+func codexRequestAlignEnabled(cfg *config.Config) bool {
+	return cfg != nil && cfg.RequestAlignCodex
 }
