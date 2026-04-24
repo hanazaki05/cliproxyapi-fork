@@ -144,7 +144,17 @@ func (e *CodexExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.Auth
 
 func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (resp cliproxyexecutor.Response, err error) {
 	if opts.Alt == "responses/compact" {
-		return e.executeCompact(ctx, auth, req, opts)
+		resp, err = e.executeCompact(ctx, auth, req, opts)
+		if err == nil {
+			return resp, nil
+		}
+		if se, ok := err.(statusErr); ok && se.code >= 500 {
+			helps.LogWithRequestID(ctx).Debugf("compact: upstream returned %d, falling back to non-compact streaming path", se.code)
+			fallbackOpts := opts
+			fallbackOpts.Alt = ""
+			return e.Execute(ctx, auth, req, fallbackOpts)
+		}
+		return resp, err
 	}
 	baseModel := thinking.ParseSuffix(req.Model).ModelName
 
