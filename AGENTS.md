@@ -16,6 +16,10 @@ go build -o test-output ./cmd/server && rm test-output # Verify compile (REQUIRE
 ```
 - Common flags: `--config <path>`, `--tui`, `--standalone`, `--local-model`, `--no-browser`, `--oauth-callback-port <port>`
 
+## macOS Binary Updates
+- After every local binary update/replacement on macOS, manually remove Gatekeeper quarantine metadata and re-apply an ad-hoc signature before verification.
+- Typical commands: `xattr -dr com.apple.quarantine <binary>` and `codesign --force --sign - <binary>`.
+
 ## Config
 - Default config: `config.yaml` (template: `config.example.yaml`)
 - `.env` is auto-loaded from the working directory
