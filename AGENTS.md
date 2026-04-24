@@ -26,6 +26,21 @@ go build -o test-output ./cmd/server && rm test-output # Verify compile (REQUIRE
 - Auth material defaults under `auths/`
 - Storage backends: file-based default; optional Postgres/git/object store (`PGSTORE_*`, `GITSTORE_*`, `OBJECTSTORE_*`)
 
+### `request-align-codex`
+Enables Codex-like request identity/session header alignment (e.g. `X-Codex-Turn-State`, `X-Codex-Installation-Id`, `X-Codex-Window-Id`, `X-OpenAI-Subagent`, conversation turn headers). Disabled by default to preserve legacy proxy behavior. When disabled, only a `Session_id` header is injected for Mac OS user agents.
+```yaml
+request-align-codex: false
+```
+
+### `oauth-default-priority`
+Sets a baseline priority for all OAuth/file-backed auth entries of a given provider.
+Individual credential JSON files can override this with their own `"priority"` field (per-credential takes precedence).
+```yaml
+oauth-default-priority:
+  codex: 5
+  antigravity: 10
+```
+
 ## Architecture
 - `cmd/server/` — Server entrypoint
 - `internal/api/` — Gin HTTP API (routes, middleware, modules)
