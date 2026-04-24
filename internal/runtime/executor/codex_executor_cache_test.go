@@ -27,35 +27,34 @@ func TestCodexExecutorCacheHelper_OpenAIChatCompletions_StablePromptCacheKeyFrom
 	}
 	url := "https://example.com/responses"
 
-	httpReq, err := executor.cacheHelper(ctx, sdktranslator.FromString("openai"), url, req, rawJSON)
+	httpReqBody, httpReq, err := executor.cacheHelper(ctx, cliproxyexecutor.Options{}, sdktranslator.FromString("openai"), url, req, rawJSON)
 	if err != nil {
 		t.Fatalf("cacheHelper error: %v", err)
 	}
 
-	body, errRead := io.ReadAll(httpReq.Body)
+	_, errRead := io.ReadAll(httpReq.Body)
 	if errRead != nil {
 		t.Fatalf("read request body: %v", errRead)
 	}
 
 	expectedKey := uuid.NewSHA1(uuid.NameSpaceOID, []byte("cli-proxy-api:codex:prompt-cache:test-api-key")).String()
-	gotKey := gjson.GetBytes(body, "prompt_cache_key").String()
+	gotKey := gjson.GetBytes(httpReqBody, "prompt_cache_key").String()
 	if gotKey != expectedKey {
 		t.Fatalf("prompt_cache_key = %q, want %q", gotKey, expectedKey)
 	}
-	if gotConversation := httpReq.Header.Get("Conversation_id"); gotConversation != "" {
-		t.Fatalf("Conversation_id = %q, want empty", gotConversation)
+	if gotConversation := httpReq.Header.Get("Conversation_id"); gotConversation != expectedKey {
+		t.Fatalf("Conversation_id = %q, want %q", gotConversation, expectedKey)
 	}
 	if gotSession := httpReq.Header.Get("Session_id"); gotSession != expectedKey {
 		t.Fatalf("Session_id = %q, want %q", gotSession, expectedKey)
 	}
+	if gotRequestID := httpReq.Header.Get("X-Client-Request-Id"); gotRequestID != expectedKey {
+		t.Fatalf("X-Client-Request-Id = %q, want %q", gotRequestID, expectedKey)
+	}
 
-	httpReq2, err := executor.cacheHelper(ctx, sdktranslator.FromString("openai"), url, req, rawJSON)
+	body2, _, err := executor.cacheHelper(ctx, cliproxyexecutor.Options{}, sdktranslator.FromString("openai"), url, req, rawJSON)
 	if err != nil {
 		t.Fatalf("cacheHelper error (second call): %v", err)
-	}
-	body2, errRead2 := io.ReadAll(httpReq2.Body)
-	if errRead2 != nil {
-		t.Fatalf("read request body (second call): %v", errRead2)
 	}
 	gotKey2 := gjson.GetBytes(body2, "prompt_cache_key").String()
 	if gotKey2 != expectedKey {

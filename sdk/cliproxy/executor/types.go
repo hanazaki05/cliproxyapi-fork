@@ -19,6 +19,12 @@ const (
 	SelectedAuthCallbackMetadataKey = "selected_auth_callback"
 	// ExecutionSessionMetadataKey identifies a long-lived downstream execution session.
 	ExecutionSessionMetadataKey = "execution_session_id"
+	// TurnIDMetadataKey identifies the current logical turn.
+	TurnIDMetadataKey = "turn_id"
+	// TurnStateMetadataKey stores sticky routing state for the current logical turn.
+	TurnStateMetadataKey = "turn_state"
+	// SubagentMetadataKey stores the subagent label for Codex subagent flows.
+	SubagentMetadataKey = "subagent"
 )
 
 // Request encapsulates the translated payload that will be sent to a provider executor.
