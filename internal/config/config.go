@@ -156,13 +156,25 @@ type Config struct {
 // profiles are enabled, OS/Arch become the pinned platform baseline, while
 // UserAgent/PackageVersion/RuntimeVersion seed the upgradeable software fingerprint.
 type ClaudeHeaderDefaults struct {
-	UserAgent              string `yaml:"user-agent" json:"user-agent"`
-	PackageVersion         string `yaml:"package-version" json:"package-version"`
-	RuntimeVersion         string `yaml:"runtime-version" json:"runtime-version"`
-	OS                     string `yaml:"os" json:"os"`
-	Arch                   string `yaml:"arch" json:"arch"`
-	Timeout                string `yaml:"timeout" json:"timeout"`
-	StabilizeDeviceProfile *bool  `yaml:"stabilize-device-profile,omitempty" json:"stabilize-device-profile,omitempty"`
+	UserAgent              string           `yaml:"user-agent" json:"user-agent"`
+	PackageVersion         string           `yaml:"package-version" json:"package-version"`
+	RuntimeVersion         string           `yaml:"runtime-version" json:"runtime-version"`
+	OS                     string           `yaml:"os" json:"os"`
+	Arch                   string           `yaml:"arch" json:"arch"`
+	Timeout                string           `yaml:"timeout" json:"timeout"`
+	StabilizeDeviceProfile *bool            `yaml:"stabilize-device-profile,omitempty" json:"stabilize-device-profile,omitempty"`
+	BetaRules              []ClaudeBetaRule `yaml:"beta-rules,omitempty" json:"beta-rules,omitempty"`
+}
+
+// ClaudeBetaRule customizes the default Anthropic-Beta header for Claude-compatible requests.
+// Rules are evaluated only when the client does not explicitly send its own Anthropic-Beta header.
+// Provider, EndpointHosts, and Model support '*' wildcards and match case-insensitively.
+type ClaudeBetaRule struct {
+	Provider      string   `yaml:"provider,omitempty" json:"provider,omitempty"`
+	EndpointHosts []string `yaml:"endpoint-host,omitempty" json:"endpoint-host,omitempty"`
+	Model         string   `yaml:"model,omitempty" json:"model,omitempty"`
+	Add           []string `yaml:"add,omitempty" json:"add,omitempty"`
+	Remove        []string `yaml:"remove,omitempty" json:"remove,omitempty"`
 }
 
 // CodexHeaderDefaults configures fallback header values injected into Codex
@@ -805,6 +817,77 @@ func (cfg *Config) SanitizeClaudeHeaderDefaults() {
 	cfg.ClaudeHeaderDefaults.OS = strings.TrimSpace(cfg.ClaudeHeaderDefaults.OS)
 	cfg.ClaudeHeaderDefaults.Arch = strings.TrimSpace(cfg.ClaudeHeaderDefaults.Arch)
 	cfg.ClaudeHeaderDefaults.Timeout = strings.TrimSpace(cfg.ClaudeHeaderDefaults.Timeout)
+	cfg.ClaudeHeaderDefaults.BetaRules = sanitizeClaudeBetaRules(cfg.ClaudeHeaderDefaults.BetaRules)
+}
+
+func sanitizeClaudeBetaRules(rules []ClaudeBetaRule) []ClaudeBetaRule {
+	if len(rules) == 0 {
+		return nil
+	}
+	out := make([]ClaudeBetaRule, 0, len(rules))
+	for _, rule := range rules {
+		clean := ClaudeBetaRule{
+			Provider:      strings.TrimSpace(rule.Provider),
+			EndpointHosts: normalizeClaudeBetaRulePatterns(rule.EndpointHosts),
+			Model:         strings.TrimSpace(rule.Model),
+			Add:           normalizeClaudeBetaList(rule.Add),
+			Remove:        normalizeClaudeBetaList(rule.Remove),
+		}
+		if len(clean.Add) == 0 && len(clean.Remove) == 0 {
+			continue
+		}
+		out = append(out, clean)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func normalizeClaudeBetaRulePatterns(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, raw := range values {
+		trimmed := strings.ToLower(strings.TrimSpace(raw))
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func normalizeClaudeBetaList(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(values))
+	out := make([]string, 0, len(values))
+	for _, raw := range values {
+		trimmed := strings.ToLower(strings.TrimSpace(raw))
+		if trimmed == "" {
+			continue
+		}
+		if _, exists := seen[trimmed]; exists {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		out = append(out, trimmed)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // SanitizeOAuthModelAlias normalizes and deduplicates global OAuth model name aliases.

@@ -217,6 +217,15 @@ nonstream-keepalive-interval: 0
 #   arch: "arm64"
 #   timeout: "600"
 #   stabilize-device-profile: false  # optional, default false; set true to enable per-auth/API-key fingerprint pinning
+#   beta-rules:                      # optional: adjust default Anthropic-Beta values per endpoint/provider/model
+#     - endpoint-host:               # optional upstream host matcher list; supports '*' wildcards
+#         - "zenmux.ai"
+#       provider: "custom"           # optional runtime provider matcher; supports '*' wildcards
+#       model: "deepseek/*"          # optional upstream model matcher; supports '*' wildcards
+#       remove:
+#         - "fast-mode-2026-02-01"   # drop default betas for matching requests
+#       add:
+#         - "custom-beta-2026-04-26" # append extra betas when the client does not send Anthropic-Beta
 
 # Default headers for Codex OAuth model requests.
 # These are used only for file-backed/OAuth Codex requests when the client

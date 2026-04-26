@@ -212,7 +212,7 @@ func (e *ClaudeExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, r
 	if err != nil {
 		return resp, err
 	}
-	applyClaudeHeaders(httpReq, auth, apiKey, false, extraBetas, e.cfg)
+	applyClaudeHeaders(httpReq, auth, apiKey, false, extraBetas, baseModel, e.cfg)
 	var authID, authLabel, authType, authValue string
 	if auth != nil {
 		authID = auth.ID
@@ -393,7 +393,7 @@ func (e *ClaudeExecutor) ExecuteStream(ctx context.Context, auth *cliproxyauth.A
 	if err != nil {
 		return nil, err
 	}
-	applyClaudeHeaders(httpReq, auth, apiKey, true, extraBetas, e.cfg)
+	applyClaudeHeaders(httpReq, auth, apiKey, true, extraBetas, baseModel, e.cfg)
 	var authID, authLabel, authType, authValue string
 	if auth != nil {
 		authID = auth.ID
@@ -570,7 +570,7 @@ func (e *ClaudeExecutor) CountTokens(ctx context.Context, auth *cliproxyauth.Aut
 	if err != nil {
 		return cliproxyexecutor.Response{}, err
 	}
-	applyClaudeHeaders(httpReq, auth, apiKey, false, extraBetas, e.cfg)
+	applyClaudeHeaders(httpReq, auth, apiKey, false, extraBetas, baseModel, e.cfg)
 	var authID, authLabel, authType, authValue string
 	if auth != nil {
 		authID = auth.ID
@@ -866,7 +866,7 @@ func decodeResponseBody(body io.ReadCloser, contentEncoding string) (io.ReadClos
 	return body, nil
 }
 
-func applyClaudeHeaders(r *http.Request, auth *cliproxyauth.Auth, apiKey string, stream bool, extraBetas []string, cfg *config.Config) {
+func applyClaudeHeaders(r *http.Request, auth *cliproxyauth.Auth, apiKey string, stream bool, extraBetas []string, model string, cfg *config.Config) {
 	hdrDefault := func(cfgVal, fallback string) string {
 		if cfgVal != "" {
 			return cfgVal
@@ -902,13 +902,15 @@ func applyClaudeHeaders(r *http.Request, auth *cliproxyauth.Auth, apiKey string,
 	baseBetas := "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,context-management-2025-06-27,prompt-caching-scope-2026-01-05,structured-outputs-2025-12-15,fast-mode-2026-02-01,redact-thinking-2026-02-12,token-efficient-tools-2026-03-28"
 	if val := strings.TrimSpace(ginHeaders.Get("Anthropic-Beta")); val != "" {
 		baseBetas = val
-		if !strings.Contains(val, "oauth") {
-			baseBetas += ",oauth-2025-04-20"
+	} else {
+		endpointHost := ""
+		if r.URL != nil {
+			endpointHost = r.URL.Hostname()
 		}
+		baseBetas = applyClaudeConfiguredBetaRules(baseBetas, auth, endpointHost, model, cfg)
 	}
-	if !strings.Contains(baseBetas, "interleaved-thinking") {
-		baseBetas += ",interleaved-thinking-2025-05-14"
-	}
+	baseBetas = ensureClaudeBeta(baseBetas, "oauth-2025-04-20")
+	baseBetas = ensureClaudeBeta(baseBetas, "interleaved-thinking-2025-05-14")
 
 	// Merge extra betas from request body and request flags.
 	if len(extraBetas) > 0 {
@@ -976,6 +978,153 @@ func applyClaudeHeaders(r *http.Request, auth *cliproxyauth.Auth, apiKey string,
 	if stream {
 		r.Header.Set("Accept-Encoding", "identity")
 	}
+}
+
+func applyClaudeConfiguredBetaRules(baseBetas string, auth *cliproxyauth.Auth, endpointHost, model string, cfg *config.Config) string {
+	if cfg == nil || len(cfg.ClaudeHeaderDefaults.BetaRules) == 0 {
+		return baseBetas
+	}
+	provider := resolveClaudeBetaRuleProvider(auth)
+	endpointHost = strings.ToLower(strings.TrimSpace(endpointHost))
+	out := baseBetas
+	for _, rule := range cfg.ClaudeHeaderDefaults.BetaRules {
+		if !matchClaudeBetaRulePattern(rule.Provider, provider) {
+			continue
+		}
+		if !matchClaudeBetaRuleAnyPattern(rule.EndpointHosts, endpointHost) {
+			continue
+		}
+		if !matchClaudeBetaRulePattern(rule.Model, model) {
+			continue
+		}
+		for _, beta := range rule.Remove {
+			out = removeClaudeBeta(out, beta)
+		}
+		for _, beta := range rule.Add {
+			out = ensureClaudeBeta(out, beta)
+		}
+	}
+	return out
+}
+
+func matchClaudeBetaRuleAnyPattern(patterns []string, value string) bool {
+	if len(patterns) == 0 {
+		return true
+	}
+	for _, pattern := range patterns {
+		if matchClaudeBetaRulePattern(pattern, value) {
+			return true
+		}
+	}
+	return false
+}
+
+func resolveClaudeBetaRuleProvider(auth *cliproxyauth.Auth) string {
+	if auth == nil {
+		return ""
+	}
+	if auth.Attributes != nil {
+		if providerKey := strings.TrimSpace(auth.Attributes["provider_key"]); providerKey != "" {
+			return strings.ToLower(providerKey)
+		}
+	}
+	return strings.ToLower(strings.TrimSpace(auth.Provider))
+}
+
+func matchClaudeBetaRulePattern(pattern, value string) bool {
+	pattern = strings.ToLower(strings.TrimSpace(pattern))
+	value = strings.ToLower(strings.TrimSpace(value))
+	if pattern == "" || pattern == "*" {
+		return true
+	}
+	if value == "" {
+		return false
+	}
+	pi, si := 0, 0
+	starIdx := -1
+	matchIdx := 0
+	for si < len(value) {
+		if pi < len(pattern) && pattern[pi] == value[si] {
+			pi++
+			si++
+			continue
+		}
+		if pi < len(pattern) && pattern[pi] == '*' {
+			starIdx = pi
+			matchIdx = si
+			pi++
+			continue
+		}
+		if starIdx != -1 {
+			pi = starIdx + 1
+			matchIdx++
+			si = matchIdx
+			continue
+		}
+		return false
+	}
+	for pi < len(pattern) && pattern[pi] == '*' {
+		pi++
+	}
+	return pi == len(pattern)
+}
+
+func parseClaudeBetas(header string) []string {
+	if strings.TrimSpace(header) == "" {
+		return nil
+	}
+	parts := strings.Split(header, ",")
+	out := make([]string, 0, len(parts))
+	seen := make(map[string]struct{}, len(parts))
+	for _, part := range parts {
+		beta := strings.ToLower(strings.TrimSpace(part))
+		if beta == "" {
+			continue
+		}
+		if _, ok := seen[beta]; ok {
+			continue
+		}
+		seen[beta] = struct{}{}
+		out = append(out, beta)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func ensureClaudeBeta(header, beta string) string {
+	beta = strings.ToLower(strings.TrimSpace(beta))
+	if beta == "" {
+		return strings.TrimSpace(header)
+	}
+	betas := parseClaudeBetas(header)
+	for _, existing := range betas {
+		if existing == beta {
+			return strings.Join(betas, ",")
+		}
+	}
+	betas = append(betas, beta)
+	return strings.Join(betas, ",")
+}
+
+func removeClaudeBeta(header, beta string) string {
+	beta = strings.ToLower(strings.TrimSpace(beta))
+	if beta == "" {
+		return strings.Join(parseClaudeBetas(header), ",")
+	}
+	betas := parseClaudeBetas(header)
+	if len(betas) == 0 {
+		return ""
+	}
+	filtered := betas[:0]
+	for _, existing := range betas {
+		if existing == beta {
+			continue
+		}
+		filtered = append(filtered, existing)
+	}
+	return strings.Join(filtered, ",")
 }
 
 func claudeCreds(a *cliproxyauth.Auth) (apiKey, baseURL string) {
