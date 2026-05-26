@@ -579,9 +579,10 @@ func (e *CodexWebsocketsExecutor) ExecuteStream(ctx context.Context, auth *clipr
 				}
 				terminateReason = "read_error"
 				terminateErr = errRead
+				readErr := statusErr{code: http.StatusRequestTimeout, msg: "stream error: " + errRead.Error()}
 				helps.RecordAPIWebsocketError(ctx, e.cfg, "read", errRead)
-				reporter.PublishFailure(ctx, errRead)
-				_ = send(cliproxyexecutor.StreamChunk{Err: errRead})
+				reporter.PublishFailure(ctx, readErr)
+				_ = send(cliproxyexecutor.StreamChunk{Err: readErr})
 				return
 			}
 			if msgType != websocket.TextMessage {
