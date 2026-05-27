@@ -146,6 +146,36 @@ func TestUsageQueuePluginPayloadIncludesStableFieldsAndFailureAndGinRequestID(t 
 	})
 }
 
+func TestUsageQueuePluginPayloadMarksCanceledOutcome(t *testing.T) {
+	withEnabledQueue(t, func() {
+		ctx := internallogging.WithRequestID(context.Background(), "ctx-request-id")
+		ctx = internallogging.WithEndpoint(ctx, "POST /v1/responses")
+		ctx = internallogging.WithResponseStatusHolder(ctx)
+		internallogging.SetResponseStatus(ctx, http.StatusInternalServerError)
+
+		plugin := &usageQueuePlugin{}
+		plugin.HandleUsage(ctx, coreusage.Record{
+			Provider:    "codex",
+			Model:       "gpt-5.5",
+			Alias:       "gpt-5.5",
+			AuthIndex:   "0",
+			AuthType:    "apikey",
+			Source:      "sk-test",
+			RequestedAt: time.Date(2026, 4, 25, 0, 0, 0, 0, time.UTC),
+			Latency:     2500 * time.Millisecond,
+			Outcome:     coreusage.OutcomeCanceled,
+			Fail: coreusage.Failure{
+				Body: `Post "https://example.test/responses": context canceled`,
+			},
+		})
+
+		payload := popSinglePayload(t)
+		requireStringField(t, payload, "outcome", coreusage.OutcomeCanceled)
+		requireBoolField(t, payload, "failed", false)
+		requireFailField(t, payload, 499, `Post "https://example.test/responses": context canceled`)
+	})
+}
+
 func TestUsageQueuePluginAsyncIgnoresRecycledGinContext(t *testing.T) {
 	withEnabledQueue(t, func() {
 		ginCtx := newTestGinContext(t, http.MethodPost, "/v1/chat/completions", http.StatusOK)

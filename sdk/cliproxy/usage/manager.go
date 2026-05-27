@@ -25,11 +25,20 @@ type Record struct {
 	RequestedAt     time.Time
 	Latency         time.Duration
 	Failed          bool
-	Fail            Failure
-	Detail          Detail
+	// Outcome stores a coarse result state for attempts that are not plain
+	// success/failure, such as downstream client cancellation.
+	Outcome string
+	Fail    Failure
+	Detail  Detail
 	// ResponseHeaders stores a snapshot of upstream response headers for usage sinks.
 	ResponseHeaders http.Header
 }
+
+const (
+	OutcomeSuccess  = "success"
+	OutcomeFailure  = "failed"
+	OutcomeCanceled = "canceled"
+)
 
 // Failure holds HTTP failure metadata for an upstream request attempt.
 type Failure struct {

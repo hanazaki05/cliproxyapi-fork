@@ -69,11 +69,22 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 		tokens.TotalTokens = tokens.InputTokens + tokens.OutputTokens + tokens.ReasoningTokens + tokens.CachedTokens
 	}
 
-	failed := record.Failed
-	if !failed {
+	outcome := normalizeUsageOutcome(record.Outcome, record.Failed)
+	failed := outcome == coreusage.OutcomeFailure
+	if outcome == "" {
+		failed = record.Failed
+	}
+	if outcome == "" && !failed {
 		failed = !resolveSuccess(ctx)
 	}
-	fail := resolveFail(ctx, record, failed)
+	if outcome == "" {
+		if failed {
+			outcome = coreusage.OutcomeFailure
+		} else {
+			outcome = coreusage.OutcomeSuccess
+		}
+	}
+	fail := resolveFail(ctx, record, failed, outcome)
 
 	detail := requestDetail{
 		Timestamp:       timestamp,
@@ -82,6 +93,7 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 		AuthIndex:       record.AuthIndex,
 		Tokens:          tokens,
 		Failed:          failed,
+		Outcome:         outcome,
 		Fail:            fail,
 		ResponseHeaders: record.ResponseHeaders,
 	}
@@ -122,6 +134,7 @@ type requestDetail struct {
 	AuthIndex       string      `json:"auth_index"`
 	Tokens          tokenStats  `json:"tokens"`
 	Failed          bool        `json:"failed"`
+	Outcome         string      `json:"outcome"`
 	Fail            failDetail  `json:"fail"`
 	ResponseHeaders http.Header `json:"response_headers,omitempty"`
 }
@@ -141,10 +154,32 @@ type failDetail struct {
 	Body       string `json:"body"`
 }
 
-func resolveFail(ctx context.Context, record coreusage.Record, failed bool) failDetail {
+func normalizeUsageOutcome(outcome string, failed bool) string {
+	switch strings.ToLower(strings.TrimSpace(outcome)) {
+	case coreusage.OutcomeSuccess, "ok":
+		return coreusage.OutcomeSuccess
+	case coreusage.OutcomeFailure, "failure", "error":
+		return coreusage.OutcomeFailure
+	case coreusage.OutcomeCanceled, "cancelled", "interrupted", "client_canceled", "client_cancelled", "context_canceled":
+		return coreusage.OutcomeCanceled
+	default:
+		if failed {
+			return coreusage.OutcomeFailure
+		}
+		return ""
+	}
+}
+
+func resolveFail(ctx context.Context, record coreusage.Record, failed bool, outcome string) failDetail {
 	fail := failDetail{
 		StatusCode: record.Fail.StatusCode,
 		Body:       strings.TrimSpace(record.Fail.Body),
+	}
+	if outcome == coreusage.OutcomeCanceled {
+		if fail.StatusCode <= 0 {
+			fail.StatusCode = 499
+		}
+		return fail
 	}
 	if !failed {
 		return failDetail{StatusCode: 200}

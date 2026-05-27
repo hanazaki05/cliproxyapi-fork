@@ -109,6 +109,9 @@ type Result struct {
 	Model string
 	// Success marks whether the execution succeeded.
 	Success bool
+	// Canceled marks downstream cancellation/interruption. Canceled attempts are
+	// intentionally excluded from auth health, cooldown, quota, and suspend state.
+	Canceled bool
 	// RetryAfter carries a provider supplied retry hint (e.g. 429 retryDelay).
 	RetryAfter *time.Duration
 	// Error describes the failure when Success is false.
@@ -2259,6 +2262,9 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 	if result.AuthID == "" {
 		return
 	}
+	if result.Canceled || isCanceledResultError(result.Error) {
+		return
+	}
 
 	shouldResumeModel := false
 	shouldSuspendModel := false
@@ -2664,6 +2670,23 @@ func statusCodeFromResult(err *Error) int {
 		return 0
 	}
 	return err.StatusCode()
+}
+
+func isCanceledResultError(err *Error) bool {
+	if err == nil {
+		return false
+	}
+	if strings.EqualFold(strings.TrimSpace(err.Code), "canceled") ||
+		strings.EqualFold(strings.TrimSpace(err.Code), "cancelled") ||
+		strings.EqualFold(strings.TrimSpace(err.Code), "interrupted") ||
+		strings.EqualFold(strings.TrimSpace(err.Code), "context_canceled") {
+		return true
+	}
+	message := strings.ToLower(strings.TrimSpace(err.Message))
+	return strings.Contains(message, "context canceled") ||
+		strings.Contains(message, "context deadline exceeded") ||
+		strings.Contains(message, "client canceled") ||
+		strings.Contains(message, "client cancelled")
 }
 
 func isModelSupportErrorMessage(message string) bool {

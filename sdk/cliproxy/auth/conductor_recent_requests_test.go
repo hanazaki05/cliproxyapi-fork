@@ -47,6 +47,53 @@ func TestManagerMarkResultRecordsRecentRequests(t *testing.T) {
 	}
 }
 
+func TestManagerMarkResultIgnoresCanceledAttempts(t *testing.T) {
+	mgr := NewManager(nil, nil, nil)
+	auth := &Auth{
+		ID:       "auth-1",
+		Provider: "codex",
+		Metadata: map[string]any{
+			"type": "codex",
+		},
+	}
+
+	if _, err := mgr.Register(WithSkipPersist(context.Background()), auth); err != nil {
+		t.Fatalf("Register returned error: %v", err)
+	}
+
+	mgr.MarkResult(context.Background(), Result{
+		AuthID:   "auth-1",
+		Provider: "codex",
+		Model:    "gpt-5.5",
+		Success:  false,
+		Error:    &Error{Message: `Post "https://example.test/responses": context canceled`},
+	})
+
+	gotAuth, ok := mgr.GetByID("auth-1")
+	if !ok || gotAuth == nil {
+		t.Fatalf("GetByID returned ok=%v auth=%v", ok, gotAuth)
+	}
+	if gotAuth.Success != 0 || gotAuth.Failed != 0 {
+		t.Fatalf("auth totals = success=%d failed=%d, want 0/0", gotAuth.Success, gotAuth.Failed)
+	}
+	if gotAuth.LastError != nil {
+		t.Fatalf("LastError = %#v, want nil", gotAuth.LastError)
+	}
+	if !gotAuth.NextRetryAfter.IsZero() {
+		t.Fatalf("NextRetryAfter = %v, want zero", gotAuth.NextRetryAfter)
+	}
+	if state := gotAuth.ModelStates["gpt-5.5"]; state != nil {
+		t.Fatalf("model state = %#v, want nil", state)
+	}
+
+	snapshot := gotAuth.RecentRequestsSnapshot(time.Now())
+	for idx, bucket := range snapshot {
+		if bucket.Success != 0 || bucket.Failed != 0 {
+			t.Fatalf("bucket[%d] = success=%d failed=%d, want 0/0", idx, bucket.Success, bucket.Failed)
+		}
+	}
+}
+
 func TestManagerUpdatePreservesRecentRequestsAndTotals(t *testing.T) {
 	mgr := NewManager(nil, nil, nil)
 	auth := &Auth{

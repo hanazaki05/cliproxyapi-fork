@@ -2,6 +2,7 @@ package helps
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -166,6 +167,22 @@ func TestUsageReporterBuildRecordIncludesReasoningEffort(t *testing.T) {
 	record := reporter.buildRecord(usage.Detail{TotalTokens: 3}, false)
 	if record.ReasoningEffort != "medium" {
 		t.Fatalf("reasoning effort = %q, want %q", record.ReasoningEffort, "medium")
+	}
+}
+
+func TestUsageReporterBuildRecordMarksCanceledOutcome(t *testing.T) {
+	reporter := NewUsageReporter(context.Background(), "codex", "gpt-5.5", nil)
+	fail := failFromErrors(errors.New(`Post "https://example.test/responses": context canceled`))
+
+	record := reporter.buildRecord(usage.Detail{}, false, fail)
+	if record.Failed {
+		t.Fatalf("record.Failed = true, want false")
+	}
+	if record.Outcome != usage.OutcomeCanceled {
+		t.Fatalf("record.Outcome = %q, want %q", record.Outcome, usage.OutcomeCanceled)
+	}
+	if record.Fail.Body == "" {
+		t.Fatalf("record.Fail.Body is empty, want cancellation message")
 	}
 }
 

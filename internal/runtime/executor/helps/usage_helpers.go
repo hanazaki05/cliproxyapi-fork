@@ -82,7 +82,12 @@ func (r *UsageReporter) buildAdditionalModelRecord(model string, detail usage.De
 }
 
 func (r *UsageReporter) PublishFailure(ctx context.Context, errs ...error) {
-	r.publishWithOutcome(ctx, usage.Detail{}, true, failFromErrors(errs...))
+	fail := failFromErrors(errs...)
+	if isCanceledError(errs...) {
+		r.publishWithOutcome(ctx, usage.Detail{}, false, fail)
+		return
+	}
+	r.publishWithOutcome(ctx, usage.Detail{}, true, fail)
 }
 
 func (r *UsageReporter) TrackFailure(ctx context.Context, errPtr *error) {
@@ -148,7 +153,7 @@ func (r *UsageReporter) buildRecord(detail usage.Detail, failed bool, failures .
 		fail = failures[0]
 	}
 	if r == nil {
-		return usage.Record{Detail: detail, Failed: failed, Fail: fail}
+		return usage.Record{Detail: detail, Failed: failed, Outcome: usageOutcome(failed, fail), Fail: fail}
 	}
 	return r.buildRecordForModel(r.model, detail, failed, fail)
 }
@@ -170,6 +175,7 @@ func (r *UsageReporter) buildRecordForModel(model string, detail usage.Detail, f
 		RequestedAt:     r.requestedAt,
 		Latency:         r.latency(),
 		Failed:          failed,
+		Outcome:         usageOutcome(failed, fail),
 		Fail:            fail,
 		Detail:          detail,
 	}
@@ -190,6 +196,43 @@ func failFromErrors(errs ...error) usage.Failure {
 		return fail
 	}
 	return usage.Failure{}
+}
+
+func isCanceledError(errs ...error) bool {
+	for _, err := range errs {
+		if err == nil {
+			continue
+		}
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return true
+		}
+		lower := strings.ToLower(strings.TrimSpace(err.Error()))
+		if strings.Contains(lower, "context canceled") ||
+			strings.Contains(lower, "context deadline exceeded") ||
+			strings.Contains(lower, "client canceled") ||
+			strings.Contains(lower, "client cancelled") {
+			return true
+		}
+	}
+	return false
+}
+
+func usageOutcome(failed bool, fail usage.Failure) string {
+	if !failed && isCanceledFailure(fail) {
+		return usage.OutcomeCanceled
+	}
+	if failed {
+		return usage.OutcomeFailure
+	}
+	return usage.OutcomeSuccess
+}
+
+func isCanceledFailure(fail usage.Failure) bool {
+	body := strings.ToLower(strings.TrimSpace(fail.Body))
+	return strings.Contains(body, "context canceled") ||
+		strings.Contains(body, "context deadline exceeded") ||
+		strings.Contains(body, "client canceled") ||
+		strings.Contains(body, "client cancelled")
 }
 
 func (r *UsageReporter) latency() time.Duration {
