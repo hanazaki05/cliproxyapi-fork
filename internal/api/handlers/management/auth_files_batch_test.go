@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -81,6 +83,83 @@ func TestUploadAuthFile_BatchMultipart(t *testing.T) {
 	auths := manager.List()
 	if len(auths) != len(files) {
 		t.Fatalf("expected %d auth entries, got %d", len(files), len(auths))
+	}
+}
+
+func TestUploadAuthFile_BatchMultipartThirtyCodexFiles(t *testing.T) {
+	t.Setenv("MANAGEMENT_PASSWORD", "")
+	gin.SetMode(gin.TestMode)
+
+	authDir := t.TempDir()
+	manager := coreauth.NewManager(nil, nil, nil)
+	h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: authDir}, manager)
+
+	const totalFiles = 30
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	for i := range totalFiles {
+		name := "synthetic-codex-" + strconv.Itoa(i+1) + "@outlook.com.json"
+		part, err := writer.CreateFormFile("file", name)
+		if err != nil {
+			t.Fatalf("failed to create multipart file %s: %v", name, err)
+		}
+		content := map[string]any{
+			"type":          "codex",
+			"email":         "synthetic-codex-" + strconv.Itoa(i+1) + "@outlook.com",
+			"access_token":  "synthetic-access-token",
+			"refresh_token": "synthetic-refresh-token",
+			"id_token":      "synthetic-id-token",
+			"expired":       false,
+			"last_refresh":  int64(1779758976 + i),
+		}
+		if err = json.NewEncoder(part).Encode(content); err != nil {
+			t.Fatalf("failed to write multipart content %s: %v", name, err)
+		}
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatalf("failed to close multipart writer: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(rec)
+	req := httptest.NewRequest(http.MethodPost, "/v0/management/auth-files", &body)
+	req.Header.Set("Content-Type", writer.FormDataContentType())
+	ctx.Request = req
+
+	h.UploadAuthFile(ctx)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected upload status %d, got %d with body %s", http.StatusOK, rec.Code, rec.Body.String())
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if got, ok := payload["uploaded"].(float64); !ok || int(got) != totalFiles {
+		t.Fatalf("expected uploaded=%d, got %#v", totalFiles, payload["uploaded"])
+	}
+
+	entries, err := os.ReadDir(authDir)
+	if err != nil {
+		t.Fatalf("failed to read auth dir: %v", err)
+	}
+	jsonFiles := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		if strings.HasSuffix(strings.ToLower(entry.Name()), ".json") {
+			jsonFiles++
+		}
+	}
+	if jsonFiles != totalFiles {
+		t.Fatalf("expected exactly %d json files on disk, got %d", totalFiles, jsonFiles)
+	}
+
+	auths := manager.List()
+	if len(auths) != totalFiles {
+		t.Fatalf("expected %d auth entries, got %d", totalFiles, len(auths))
 	}
 }
 
