@@ -1341,9 +1341,13 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 	tried := make(map[string]struct{})
 	attempted := make(map[string]struct{})
 	var lastErr error
+	var lastErrUsage *coreusage.AttemptFailureController
 	for {
 		if !homeMode && maxRetryCredentials > 0 && len(attempted) >= maxRetryCredentials {
 			if lastErr != nil {
+				if lastErrUsage != nil {
+					lastErrUsage.Publish(ctx)
+				}
 				return cliproxyexecutor.Response{}, lastErr
 			}
 			return cliproxyexecutor.Response{}, &Error{Code: "auth_not_found", Message: "no auth available"}
@@ -1355,9 +1359,16 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 		auth, executor, provider, errPick := m.pickNextMixed(ctx, providers, routeModel, pickOpts, tried)
 		if errPick != nil {
 			if shouldReturnLastErrorOnPickFailure(homeMode, lastErr, errPick) {
+				if lastErrUsage != nil {
+					lastErrUsage.Publish(ctx)
+				}
 				return cliproxyexecutor.Response{}, lastErr
 			}
 			return cliproxyexecutor.Response{}, errPick
+		}
+		if lastErrUsage != nil {
+			lastErrUsage.Discard()
+			lastErrUsage = nil
 		}
 
 		entry := logEntryWithRequestID(ctx)
@@ -1389,14 +1400,21 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 			continue
 		}
 		var authErr error
+		var authErrUsage *coreusage.AttemptFailureController
 		for _, upstreamModel := range models {
+			if authErrUsage != nil {
+				authErrUsage.Discard()
+				authErrUsage = nil
+			}
 			resultModel := m.stateModelForExecution(auth, routeModel, upstreamModel, pooled)
 			execReq := req
 			execReq.Model = upstreamModel
-			resp, errExec := executor.Execute(execCtx, auth, execReq, opts)
+			attemptCtx, attemptUsage := coreusage.WithAttemptFailureController(execCtx)
+			resp, errExec := executor.Execute(attemptCtx, auth, execReq, opts)
 			result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: errExec == nil}
 			if errExec != nil {
-				if errCtx := execCtx.Err(); errCtx != nil {
+				if errCtx := attemptCtx.Err(); errCtx != nil {
+					attemptUsage.Discard()
 					return cliproxyexecutor.Response{}, errCtx
 				}
 				result.Error = &Error{Message: errExec.Error()}
@@ -1406,21 +1424,28 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 				if ra := retryAfterFromError(errExec); ra != nil {
 					result.RetryAfter = ra
 				}
-				m.MarkResult(execCtx, result)
+				m.MarkResult(attemptCtx, result)
 				if isRequestInvalidError(errExec) {
+					attemptUsage.Publish(attemptCtx)
 					return cliproxyexecutor.Response{}, errExec
 				}
 				authErr = errExec
+				authErrUsage = attemptUsage
 				continue
 			}
-			m.MarkResult(execCtx, result)
+			attemptUsage.Release()
+			m.MarkResult(attemptCtx, result)
 			return resp, nil
 		}
 		if authErr != nil {
 			if isRequestInvalidError(authErr) {
+				if authErrUsage != nil {
+					authErrUsage.Publish(execCtx)
+				}
 				return cliproxyexecutor.Response{}, authErr
 			}
 			lastErr = authErr
+			lastErrUsage = authErrUsage
 			if homeMode {
 				homeAuthCount++
 			}
@@ -1440,9 +1465,13 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 	tried := make(map[string]struct{})
 	attempted := make(map[string]struct{})
 	var lastErr error
+	var lastErrUsage *coreusage.AttemptFailureController
 	for {
 		if !homeMode && maxRetryCredentials > 0 && len(attempted) >= maxRetryCredentials {
 			if lastErr != nil {
+				if lastErrUsage != nil {
+					lastErrUsage.Publish(ctx)
+				}
 				return cliproxyexecutor.Response{}, lastErr
 			}
 			return cliproxyexecutor.Response{}, &Error{Code: "auth_not_found", Message: "no auth available"}
@@ -1454,9 +1483,16 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 		auth, executor, provider, errPick := m.pickNextMixed(ctx, providers, routeModel, pickOpts, tried)
 		if errPick != nil {
 			if shouldReturnLastErrorOnPickFailure(homeMode, lastErr, errPick) {
+				if lastErrUsage != nil {
+					lastErrUsage.Publish(ctx)
+				}
 				return cliproxyexecutor.Response{}, lastErr
 			}
 			return cliproxyexecutor.Response{}, errPick
+		}
+		if lastErrUsage != nil {
+			lastErrUsage.Discard()
+			lastErrUsage = nil
 		}
 
 		entry := logEntryWithRequestID(ctx)
@@ -1488,14 +1524,21 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 			continue
 		}
 		var authErr error
+		var authErrUsage *coreusage.AttemptFailureController
 		for _, upstreamModel := range models {
+			if authErrUsage != nil {
+				authErrUsage.Discard()
+				authErrUsage = nil
+			}
 			resultModel := m.stateModelForExecution(auth, routeModel, upstreamModel, pooled)
 			execReq := req
 			execReq.Model = upstreamModel
-			resp, errExec := executor.CountTokens(execCtx, auth, execReq, opts)
+			attemptCtx, attemptUsage := coreusage.WithAttemptFailureController(execCtx)
+			resp, errExec := executor.CountTokens(attemptCtx, auth, execReq, opts)
 			result := Result{AuthID: auth.ID, Provider: provider, Model: resultModel, Success: errExec == nil}
 			if errExec != nil {
-				if errCtx := execCtx.Err(); errCtx != nil {
+				if errCtx := attemptCtx.Err(); errCtx != nil {
+					attemptUsage.Discard()
 					return cliproxyexecutor.Response{}, errCtx
 				}
 				result.Error = &Error{Message: errExec.Error()}
@@ -1505,21 +1548,28 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 				if ra := retryAfterFromError(errExec); ra != nil {
 					result.RetryAfter = ra
 				}
-				m.MarkResult(execCtx, result)
+				m.MarkResult(attemptCtx, result)
 				if isRequestInvalidError(errExec) {
+					attemptUsage.Publish(attemptCtx)
 					return cliproxyexecutor.Response{}, errExec
 				}
 				authErr = errExec
+				authErrUsage = attemptUsage
 				continue
 			}
-			m.MarkResult(execCtx, result)
+			attemptUsage.Release()
+			m.MarkResult(attemptCtx, result)
 			return resp, nil
 		}
 		if authErr != nil {
 			if isRequestInvalidError(authErr) {
+				if authErrUsage != nil {
+					authErrUsage.Publish(execCtx)
+				}
 				return cliproxyexecutor.Response{}, authErr
 			}
 			lastErr = authErr
+			lastErrUsage = authErrUsage
 			if homeMode {
 				homeAuthCount++
 			}
@@ -1539,9 +1589,13 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 	tried := make(map[string]struct{})
 	attempted := make(map[string]struct{})
 	var lastErr error
+	var lastErrUsage *coreusage.AttemptFailureController
 	for {
 		if !homeMode && maxRetryCredentials > 0 && len(attempted) >= maxRetryCredentials {
 			if lastErr != nil {
+				if lastErrUsage != nil {
+					lastErrUsage.Publish(ctx)
+				}
 				return nil, lastErr
 			}
 			return nil, &Error{Code: "auth_not_found", Message: "no auth available"}
@@ -1553,9 +1607,16 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 		auth, executor, provider, errPick := m.pickNextMixed(ctx, providers, routeModel, pickOpts, tried)
 		if errPick != nil {
 			if shouldReturnLastErrorOnPickFailure(homeMode, lastErr, errPick) {
+				if lastErrUsage != nil {
+					lastErrUsage.Publish(ctx)
+				}
 				return nil, lastErr
 			}
 			return nil, errPick
+		}
+		if lastErrUsage != nil {
+			lastErrUsage.Discard()
+			lastErrUsage = nil
 		}
 
 		entry := logEntryWithRequestID(ctx)
@@ -1584,20 +1645,25 @@ func (m *Manager) executeStreamMixedOnce(ctx context.Context, providers []string
 			lastErr = errPrepare
 			continue
 		}
-		streamResult, errStream := m.executeStreamWithModelPool(execCtx, executor, auth, provider, req, opts, routeModel, models, pooled)
+		attemptCtx, attemptUsage := coreusage.WithAttemptFailureController(execCtx)
+		streamResult, errStream := m.executeStreamWithModelPool(attemptCtx, executor, auth, provider, req, opts, routeModel, models, pooled)
 		if errStream != nil {
-			if errCtx := execCtx.Err(); errCtx != nil {
+			if errCtx := attemptCtx.Err(); errCtx != nil {
+				attemptUsage.Discard()
 				return nil, errCtx
 			}
 			if isRequestInvalidError(errStream) {
+				attemptUsage.Publish(attemptCtx)
 				return nil, errStream
 			}
 			lastErr = errStream
+			lastErrUsage = attemptUsage
 			if homeMode {
 				homeAuthCount++
 			}
 			continue
 		}
+		attemptUsage.Release()
 		return streamResult, nil
 	}
 }

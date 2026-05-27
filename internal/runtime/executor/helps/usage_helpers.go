@@ -87,7 +87,7 @@ func (r *UsageReporter) PublishFailure(ctx context.Context, errs ...error) {
 		r.publishWithOutcome(ctx, usage.Detail{}, false, fail)
 		return
 	}
-	r.publishWithOutcome(ctx, usage.Detail{}, true, fail)
+	r.publishFailure(ctx, fail)
 }
 
 func (r *UsageReporter) TrackFailure(ctx context.Context, errPtr *error) {
@@ -106,6 +106,21 @@ func (r *UsageReporter) publishWithOutcome(ctx context.Context, detail usage.Det
 	detail = normalizeUsageDetailTotal(detail)
 	r.once.Do(func() {
 		r.publishRecord(ctx, r.buildRecord(detail, failed, fail))
+	})
+}
+
+func (r *UsageReporter) publishFailure(ctx context.Context, fail usage.Failure) {
+	if r == nil {
+		return
+	}
+	r.once.Do(func() {
+		record := r.buildRecord(usage.Detail{}, true, fail)
+		record.ResponseHeaders = internallogging.GetResponseHeaders(ctx)
+		controller := usage.AttemptFailureControllerFromContext(ctx)
+		if controller != nil && controller.Capture(record) {
+			return
+		}
+		usage.PublishRecord(ctx, record)
 	})
 }
 

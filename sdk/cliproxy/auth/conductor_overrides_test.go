@@ -11,6 +11,7 @@ import (
 	internalconfig "github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
 	cliproxyexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
+	coreusage "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/usage"
 )
 
 const requestScopedNotFoundMessage = "Item with id 'rs_0b5f3eb6f51f175c0169ca74e4a85881998539920821603a74' not found. Items are not persisted when `store` is set to false. Try again with `store` set to true, or remove this item from your input."
@@ -208,6 +209,62 @@ func (e *authFallbackExecutor) HttpRequest(context.Context, *Auth, *http.Request
 	return nil, nil
 }
 
+type attemptUsageFallbackExecutor struct {
+	id string
+
+	mu          sync.Mutex
+	controllers map[string]*coreusage.AttemptFailureController
+}
+
+func (e *attemptUsageFallbackExecutor) Identifier() string {
+	return e.id
+}
+
+func (e *attemptUsageFallbackExecutor) Execute(ctx context.Context, auth *Auth, req cliproxyexecutor.Request, _ cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+	controller := coreusage.AttemptFailureControllerFromContext(ctx)
+	e.mu.Lock()
+	if e.controllers == nil {
+		e.controllers = make(map[string]*coreusage.AttemptFailureController)
+	}
+	e.controllers[auth.ID] = controller
+	e.mu.Unlock()
+
+	if auth.ID == "aa-bad-auth" {
+		if controller != nil {
+			controller.Capture(coreusage.Record{
+				Provider: e.id,
+				Model:    req.Model,
+				Failed:   true,
+				Outcome:  coreusage.OutcomeFailure,
+			})
+		}
+		return cliproxyexecutor.Response{}, &Error{HTTPStatus: http.StatusServiceUnavailable, Message: "first attempt failed"}
+	}
+	return cliproxyexecutor.Response{Payload: []byte(auth.ID)}, nil
+}
+
+func (e *attemptUsageFallbackExecutor) ExecuteStream(context.Context, *Auth, cliproxyexecutor.Request, cliproxyexecutor.Options) (*cliproxyexecutor.StreamResult, error) {
+	return nil, &Error{HTTPStatus: http.StatusNotImplemented, Message: "ExecuteStream not implemented"}
+}
+
+func (e *attemptUsageFallbackExecutor) Refresh(_ context.Context, auth *Auth) (*Auth, error) {
+	return auth, nil
+}
+
+func (e *attemptUsageFallbackExecutor) CountTokens(context.Context, *Auth, cliproxyexecutor.Request, cliproxyexecutor.Options) (cliproxyexecutor.Response, error) {
+	return cliproxyexecutor.Response{}, &Error{HTTPStatus: http.StatusNotImplemented, Message: "CountTokens not implemented"}
+}
+
+func (e *attemptUsageFallbackExecutor) HttpRequest(context.Context, *Auth, *http.Request) (*http.Response, error) {
+	return nil, nil
+}
+
+func (e *attemptUsageFallbackExecutor) Controller(authID string) *coreusage.AttemptFailureController {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.controllers[authID]
+}
+
 func (e *authFallbackExecutor) ExecuteCalls() []string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -402,6 +459,49 @@ func TestManager_ModelSupportBadRequest_FallsBackAndSuspendsAuth(t *testing.T) {
 	}
 	if state.NextRetryAfter.IsZero() {
 		t.Fatalf("expected bad auth model state cooldown to be set")
+	}
+}
+
+func TestManagerExecuteDiscardsCapturedUsageFailureAfterAuthFallback(t *testing.T) {
+	m := NewManager(nil, nil, nil)
+	m.SetRetryConfig(1, time.Millisecond, 0)
+
+	model := "test-model"
+	executor := &attemptUsageFallbackExecutor{id: "claude"}
+	m.RegisterExecutor(executor)
+
+	badAuth := &Auth{ID: "aa-bad-auth", Provider: "claude"}
+	goodAuth := &Auth{ID: "bb-good-auth", Provider: "claude"}
+
+	reg := registry.GetGlobalRegistry()
+	reg.RegisterClient(badAuth.ID, "claude", []*registry.ModelInfo{{ID: model}})
+	reg.RegisterClient(goodAuth.ID, "claude", []*registry.ModelInfo{{ID: model}})
+	t.Cleanup(func() {
+		reg.UnregisterClient(badAuth.ID)
+		reg.UnregisterClient(goodAuth.ID)
+	})
+
+	if _, errRegister := m.Register(context.Background(), badAuth); errRegister != nil {
+		t.Fatalf("register bad auth: %v", errRegister)
+	}
+	if _, errRegister := m.Register(context.Background(), goodAuth); errRegister != nil {
+		t.Fatalf("register good auth: %v", errRegister)
+	}
+
+	resp, errExecute := m.Execute(context.Background(), []string{"claude"}, cliproxyexecutor.Request{Model: model}, cliproxyexecutor.Options{})
+	if errExecute != nil {
+		t.Fatalf("execute error = %v, want fallback success", errExecute)
+	}
+	if string(resp.Payload) != goodAuth.ID {
+		t.Fatalf("payload = %q, want %q", string(resp.Payload), goodAuth.ID)
+	}
+
+	controller := executor.Controller(badAuth.ID)
+	if controller == nil {
+		t.Fatal("first attempt did not receive an attempt failure controller")
+	}
+	if record, ok := controller.Captured(); ok {
+		t.Fatalf("fallback-covered usage failure was still captured: %+v", record)
 	}
 }
 

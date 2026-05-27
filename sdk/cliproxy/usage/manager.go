@@ -59,6 +59,128 @@ type Detail struct {
 
 type requestedModelAliasContextKey struct{}
 type reasoningEffortContextKey struct{}
+type attemptFailureControllerContextKey struct{}
+
+type attemptFailureState int
+
+const (
+	attemptFailureCapturing attemptFailureState = iota
+	attemptFailureReleased
+	attemptFailureDiscarded
+	attemptFailurePublished
+)
+
+// AttemptFailureController lets the auth conductor defer publishing provider
+// attempt failures until it knows whether a fallback credential will supersede
+// the attempt. Once released, later stream failures are published normally.
+type AttemptFailureController struct {
+	mu        sync.Mutex
+	state     attemptFailureState
+	record    Record
+	hasRecord bool
+}
+
+// WithAttemptFailureController stores a controller that can capture failed usage
+// records for a single provider attempt.
+func WithAttemptFailureController(ctx context.Context) (context.Context, *AttemptFailureController) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	controller := &AttemptFailureController{state: attemptFailureCapturing}
+	return context.WithValue(ctx, attemptFailureControllerContextKey{}, controller), controller
+}
+
+// AttemptFailureControllerFromContext returns the attempt failure controller
+// stored in ctx, if any.
+func AttemptFailureControllerFromContext(ctx context.Context) *AttemptFailureController {
+	if ctx == nil {
+		return nil
+	}
+	controller, _ := ctx.Value(attemptFailureControllerContextKey{}).(*AttemptFailureController)
+	return controller
+}
+
+// Capture stores record while the controller is active. It returns true when the
+// caller should not publish the record itself.
+func (c *AttemptFailureController) Capture(record Record) bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	switch c.state {
+	case attemptFailureCapturing:
+		c.record = record
+		c.hasRecord = true
+		return true
+	case attemptFailureDiscarded, attemptFailurePublished:
+		return true
+	default:
+		return false
+	}
+}
+
+// Release stops capturing and allows subsequent failures on the same stream to
+// be published directly. This is used once the conductor hands a live stream
+// back to the client.
+func (c *AttemptFailureController) Release() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.record = Record{}
+	c.hasRecord = false
+	c.state = attemptFailureReleased
+}
+
+// Discard drops a captured attempt failure because another credential/model is
+// being tried or has succeeded.
+func (c *AttemptFailureController) Discard() {
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.record = Record{}
+	c.hasRecord = false
+	c.state = attemptFailureDiscarded
+}
+
+// Publish emits the captured attempt failure, if one exists, and prevents any
+// later captured records from being published twice.
+func (c *AttemptFailureController) Publish(ctx context.Context) bool {
+	if c == nil {
+		return false
+	}
+	c.mu.Lock()
+	if !c.hasRecord {
+		c.state = attemptFailurePublished
+		c.mu.Unlock()
+		return false
+	}
+	record := c.record
+	c.record = Record{}
+	c.hasRecord = false
+	c.state = attemptFailurePublished
+	c.mu.Unlock()
+	PublishRecord(ctx, record)
+	return true
+}
+
+// Captured returns the currently captured record. It is intended for focused
+// tests and diagnostics.
+func (c *AttemptFailureController) Captured() (Record, bool) {
+	if c == nil {
+		return Record{}, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.hasRecord {
+		return Record{}, false
+	}
+	return c.record, true
+}
 
 // WithRequestedModelAlias stores the client-requested model name for usage sinks.
 func WithRequestedModelAlias(ctx context.Context, alias string) context.Context {

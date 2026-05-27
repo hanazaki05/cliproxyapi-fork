@@ -186,6 +186,28 @@ func TestUsageReporterBuildRecordMarksCanceledOutcome(t *testing.T) {
 	}
 }
 
+func TestUsageReporterTrackFailureCapturesAttemptFailure(t *testing.T) {
+	ctx, controller := usage.WithAttemptFailureController(context.Background())
+	reporter := NewUsageReporter(ctx, "codex", "gpt-5.5", nil)
+	err := errors.New("upstream returned 503")
+
+	reporter.TrackFailure(ctx, &err)
+
+	record, ok := controller.Captured()
+	if !ok {
+		t.Fatal("expected attempt failure to be captured")
+	}
+	if !record.Failed {
+		t.Fatalf("record.Failed = false, want true")
+	}
+	if record.Outcome != usage.OutcomeFailure {
+		t.Fatalf("record.Outcome = %q, want %q", record.Outcome, usage.OutcomeFailure)
+	}
+	if record.Fail.Body != "upstream returned 503" {
+		t.Fatalf("record.Fail.Body = %q", record.Fail.Body)
+	}
+}
+
 func TestUsageReporterBuildAdditionalModelRecordSkipsZeroTokens(t *testing.T) {
 	reporter := &UsageReporter{
 		provider:    "codex",
