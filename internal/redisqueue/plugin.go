@@ -52,6 +52,10 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 	if reasoningEffort == "" {
 		reasoningEffort = coreusage.ReasoningEffortFromContext(ctx)
 	}
+	serviceTier := strings.TrimSpace(record.ServiceTier)
+	if serviceTier == "" {
+		serviceTier = coreusage.ServiceTierFromContext(ctx)
+	}
 
 	tokens := tokenStats{
 		InputTokens:         record.Detail.InputTokens,
@@ -89,6 +93,7 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 	detail := requestDetail{
 		Timestamp:       timestamp,
 		LatencyMs:       record.Latency.Milliseconds(),
+		TTFTMs:          record.TTFT.Milliseconds(),
 		Source:          record.Source,
 		AuthIndex:       record.AuthIndex,
 		Tokens:          tokens,
@@ -108,6 +113,7 @@ func (p *usageQueuePlugin) HandleUsage(ctx context.Context, record coreusage.Rec
 		APIKey:          apiKey,
 		RequestID:       requestID,
 		ReasoningEffort: reasoningEffort,
+		ServiceTier:     serviceTier,
 	})
 	if err != nil {
 		return
@@ -125,11 +131,13 @@ type queuedUsageDetail struct {
 	APIKey          string `json:"api_key"`
 	RequestID       string `json:"request_id"`
 	ReasoningEffort string `json:"reasoning_effort"`
+	ServiceTier     string `json:"service_tier"`
 }
 
 type requestDetail struct {
 	Timestamp       time.Time   `json:"timestamp"`
 	LatencyMs       int64       `json:"latency_ms"`
+	TTFTMs          int64       `json:"ttft_ms"`
 	Source          string      `json:"source"`
 	AuthIndex       string      `json:"auth_index"`
 	Tokens          tokenStats  `json:"tokens"`
