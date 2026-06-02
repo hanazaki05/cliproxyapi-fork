@@ -1000,6 +1000,81 @@ func TestHandleEventAuthWriteTriggersUpdate(t *testing.T) {
 	}
 }
 
+func TestHandleEventNestedAuthWriteTriggersUpdate(t *testing.T) {
+	tmpDir := t.TempDir()
+	authDir := filepath.Join(tmpDir, "auth")
+	nestedDir := filepath.Join(authDir, "vaultt")
+	if err := os.MkdirAll(nestedDir, 0o755); err != nil {
+		t.Fatalf("failed to create nested dir: %v", err)
+	}
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte("auth_dir: "+authDir+"\n"), 0o644); err != nil {
+		t.Fatalf("failed to write config file: %v", err)
+	}
+	authFile := filepath.Join(nestedDir, "aaabbb.json")
+	if err := os.WriteFile(authFile, []byte(`{"type":"codex","email":"vault@example.com"}`), 0o644); err != nil {
+		t.Fatalf("failed to write auth file: %v", err)
+	}
+
+	queue := make(chan AuthUpdate, 2)
+	w := &Watcher{
+		authDir:         authDir,
+		configPath:      configPath,
+		lastAuthHashes:  make(map[string]string),
+		fileAuthsByPath: make(map[string]map[string]*coreauth.Auth),
+	}
+	w.SetConfig(&config.Config{AuthDir: authDir})
+	w.SetAuthUpdateQueue(queue)
+	defer w.stopDispatch()
+
+	w.handleEvent(fsnotify.Event{Name: authFile, Op: fsnotify.Write})
+
+	select {
+	case update := <-queue:
+		if update.Action != AuthUpdateActionAdd || update.ID != filepath.Join("vaultt", "aaabbb.json") {
+			t.Fatalf("unexpected auth update: %+v", update)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for nested auth update")
+	}
+}
+
+func TestHandleEventIgnoresUnscannedSubdirInSubdirsMode(t *testing.T) {
+	tmpDir := t.TempDir()
+	authDir := filepath.Join(tmpDir, "auth")
+	ignoredDir := filepath.Join(authDir, "ignored")
+	if err := os.MkdirAll(ignoredDir, 0o755); err != nil {
+		t.Fatalf("failed to create ignored dir: %v", err)
+	}
+	configPath := filepath.Join(tmpDir, "config.yaml")
+	if err := os.WriteFile(configPath, []byte("auth_dir: "+authDir+"\n"), 0o644); err != nil {
+		t.Fatalf("failed to write config file: %v", err)
+	}
+	authFile := filepath.Join(ignoredDir, "ignored.json")
+	if err := os.WriteFile(authFile, []byte(`{"type":"codex"}`), 0o644); err != nil {
+		t.Fatalf("failed to write auth file: %v", err)
+	}
+
+	queue := make(chan AuthUpdate, 2)
+	w := &Watcher{
+		authDir:         authDir,
+		configPath:      configPath,
+		lastAuthHashes:  make(map[string]string),
+		fileAuthsByPath: make(map[string]map[string]*coreauth.Auth),
+	}
+	w.SetConfig(&config.Config{AuthDir: authDir, AuthScanMode: "subdirs", AuthScanDirs: []string{"vaultt"}})
+	w.SetAuthUpdateQueue(queue)
+	defer w.stopDispatch()
+
+	w.handleEvent(fsnotify.Event{Name: authFile, Op: fsnotify.Write})
+
+	select {
+	case update := <-queue:
+		t.Fatalf("unexpected auth update: %+v", update)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
 func TestHandleEventRemoveDebounceSkips(t *testing.T) {
 	tmpDir := t.TempDir()
 	authDir := filepath.Join(tmpDir, "auth")

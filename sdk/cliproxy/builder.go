@@ -207,6 +207,9 @@ func (b *Builder) Build() (*Service, error) {
 		if dirSetter, ok := tokenStore.(interface{ SetBaseDir(string) }); ok && b.cfg != nil {
 			dirSetter.SetBaseDir(b.cfg.AuthDir)
 		}
+		if cfgSetter, ok := tokenStore.(interface{ SetConfig(*config.Config) }); ok && b.cfg != nil {
+			cfgSetter.SetConfig(b.cfg)
+		}
 
 		strategy := ""
 		sessionAffinity := false

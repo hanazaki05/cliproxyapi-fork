@@ -4,15 +4,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/auth/codex"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/authscan"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/runtime/geminicli"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
+	log "github.com/sirupsen/logrus"
 )
 
 // FileSynthesizer generates Auth entries from OAuth JSON files.
@@ -31,26 +32,17 @@ func (s *FileSynthesizer) Synthesize(ctx *SynthesisContext) ([]*coreauth.Auth, e
 		return out, nil
 	}
 
-	entries, err := os.ReadDir(ctx.AuthDir)
-	if err != nil {
-		// Not an error if directory doesn't exist
-		return out, nil
+	files, warnings := authscan.ListFiles(ctx.Config, ctx.AuthDir)
+	for _, warning := range warnings {
+		log.Warn(warning)
 	}
-
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		if !strings.HasSuffix(strings.ToLower(name), ".json") {
-			continue
-		}
-		full := filepath.Join(ctx.AuthDir, name)
+	for _, file := range files {
+		full := file.Path
 		data, errRead := os.ReadFile(full)
 		if errRead != nil || len(data) == 0 {
 			continue
 		}
-		auths := synthesizeFileAuths(ctx, full, data)
+		auths := synthesizeFileAuths(ctx, full, file.ID, data)
 		if len(auths) == 0 {
 			continue
 		}
@@ -62,10 +54,16 @@ func (s *FileSynthesizer) Synthesize(ctx *SynthesisContext) ([]*coreauth.Auth, e
 // SynthesizeAuthFile generates Auth entries for one auth JSON file payload.
 // It shares exactly the same mapping behavior as FileSynthesizer.Synthesize.
 func SynthesizeAuthFile(ctx *SynthesisContext, fullPath string, data []byte) []*coreauth.Auth {
-	return synthesizeFileAuths(ctx, fullPath, data)
+	id := fullPath
+	if ctx != nil {
+		if resolvedID, ok := authscan.IDForPath(ctx.Config, ctx.AuthDir, fullPath); ok {
+			id = resolvedID
+		}
+	}
+	return synthesizeFileAuths(ctx, fullPath, id, data)
 }
 
-func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) []*coreauth.Auth {
+func synthesizeFileAuths(ctx *SynthesisContext, fullPath, id string, data []byte) []*coreauth.Auth {
 	if ctx == nil || len(data) == 0 {
 		return nil
 	}
@@ -87,12 +85,11 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath string, data []byte) []
 	if email, _ := metadata["email"].(string); email != "" {
 		label = email
 	}
-	// Use relative path under authDir as ID to stay consistent with the file-based token store.
-	id := fullPath
-	if strings.TrimSpace(ctx.AuthDir) != "" {
-		if rel, errRel := filepath.Rel(ctx.AuthDir, fullPath); errRel == nil && rel != "" {
-			id = rel
-		}
+	// Use the scanner-provided path ID to stay consistent across recursive,
+	// subdir, and symlinked explicit scan roots.
+	id = strings.TrimSpace(id)
+	if id == "" {
+		id = fullPath
 	}
 	if runtime.GOOS == "windows" {
 		id = strings.ToLower(id)

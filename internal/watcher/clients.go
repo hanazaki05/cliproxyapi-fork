@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/authscan"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/util"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/watcher/diff"
@@ -84,40 +85,32 @@ func (w *Watcher) reloadClients(rescanAuth bool, affectedOAuthProviders []string
 		if resolvedAuthDir, errResolveAuthDir := util.ResolveAuthDir(cfg.AuthDir); errResolveAuthDir != nil {
 			log.Errorf("failed to resolve auth directory for hash cache: %v", errResolveAuthDir)
 		} else if resolvedAuthDir != "" {
-			entries, errReadDir := os.ReadDir(resolvedAuthDir)
-			if errReadDir != nil {
-				log.Errorf("failed to read auth directory for hash cache: %v", errReadDir)
-			} else {
-				for _, entry := range entries {
-					if entry == nil || entry.IsDir() {
-						continue
-					}
-					name := entry.Name()
-					if !strings.HasSuffix(strings.ToLower(name), ".json") {
-						continue
-					}
-					fullPath := filepath.Join(resolvedAuthDir, name)
-					if data, errReadFile := os.ReadFile(fullPath); errReadFile == nil && len(data) > 0 {
-						sum := sha256.Sum256(data)
-						normalizedPath := w.normalizeAuthPath(fullPath)
-						w.lastAuthHashes[normalizedPath] = hex.EncodeToString(sum[:])
-						// Parse and cache auth content for future diff comparisons (debug only).
-						if cacheAuthContents {
-							var auth coreauth.Auth
-							if errParse := json.Unmarshal(data, &auth); errParse == nil {
-								w.lastAuthContents[normalizedPath] = &auth
-							}
+			files, warnings := authscan.ListFiles(cfg, resolvedAuthDir)
+			for _, warning := range warnings {
+				log.Warn(warning)
+			}
+			for _, file := range files {
+				fullPath := file.Path
+				if data, errReadFile := os.ReadFile(fullPath); errReadFile == nil && len(data) > 0 {
+					sum := sha256.Sum256(data)
+					normalizedPath := w.normalizeAuthPath(fullPath)
+					w.lastAuthHashes[normalizedPath] = hex.EncodeToString(sum[:])
+					// Parse and cache auth content for future diff comparisons (debug only).
+					if cacheAuthContents {
+						var auth coreauth.Auth
+						if errParse := json.Unmarshal(data, &auth); errParse == nil {
+							w.lastAuthContents[normalizedPath] = &auth
 						}
-						ctx := &synthesizer.SynthesisContext{
-							Config:      cfg,
-							AuthDir:     resolvedAuthDir,
-							Now:         time.Now(),
-							IDGenerator: synthesizer.NewStableIDGenerator(),
-						}
-						if generated := synthesizer.SynthesizeAuthFile(ctx, fullPath, data); len(generated) > 0 {
-							if pathAuths := authSliceToMap(generated); len(pathAuths) > 0 {
-								w.fileAuthsByPath[normalizedPath] = authIDSet(pathAuths)
-							}
+					}
+					ctx := &synthesizer.SynthesisContext{
+						Config:      cfg,
+						AuthDir:     resolvedAuthDir,
+						Now:         time.Now(),
+						IDGenerator: synthesizer.NewStableIDGenerator(),
+					}
+					if generated := synthesizer.SynthesizeAuthFile(ctx, fullPath, data); len(generated) > 0 {
+						if pathAuths := authSliceToMap(generated); len(pathAuths) > 0 {
+							w.fileAuthsByPath[normalizedPath] = authIDSet(pathAuths)
 						}
 					}
 				}
@@ -312,23 +305,14 @@ func (w *Watcher) loadFileClients(cfg *config.Config) int {
 		return 0
 	}
 
-	entries, errReadDir := os.ReadDir(authDir)
-	if errReadDir != nil {
-		log.Errorf("error reading auth directory: %v", errReadDir)
-		return 0
+	files, warnings := authscan.ListFiles(cfg, authDir)
+	for _, warning := range warnings {
+		log.Warn(warning)
 	}
-	for _, entry := range entries {
-		if entry == nil || entry.IsDir() {
-			continue
-		}
-		name := entry.Name()
-		if !strings.HasSuffix(strings.ToLower(name), ".json") {
-			continue
-		}
+	for i, file := range files {
 		authFileCount++
-		log.Debugf("processing auth file %d: %s", authFileCount, name)
-		fullPath := filepath.Join(authDir, name)
-		if data, errReadFile := os.ReadFile(fullPath); errReadFile == nil && len(data) > 0 {
+		log.Debugf("processing auth file %d: %s", i+1, file.ID)
+		if data, errReadFile := os.ReadFile(file.Path); errReadFile == nil && len(data) > 0 {
 			successfulAuthCount++
 		}
 	}

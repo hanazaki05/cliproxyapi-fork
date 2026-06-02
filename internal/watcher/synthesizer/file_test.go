@@ -199,11 +199,11 @@ func TestFileSynthesizer_Synthesize_SkipsInvalidFiles(t *testing.T) {
 	}
 }
 
-func TestFileSynthesizer_Synthesize_SkipsDirectories(t *testing.T) {
+func TestFileSynthesizer_Synthesize_RecursesIntoDirectories(t *testing.T) {
 	tempDir := t.TempDir()
 
 	// Create a subdirectory with a json file inside
-	subDir := filepath.Join(tempDir, "subdir.json")
+	subDir := filepath.Join(tempDir, "subdir")
 	err := os.Mkdir(subDir, 0755)
 	if err != nil {
 		t.Fatalf("failed to create subdir: %v", err)
@@ -212,6 +212,112 @@ func TestFileSynthesizer_Synthesize_SkipsDirectories(t *testing.T) {
 	// Create a valid file in root
 	validData, _ := json.Marshal(map[string]any{"type": "claude"})
 	_ = os.WriteFile(filepath.Join(tempDir, "valid.json"), validData, 0644)
+	_ = os.WriteFile(filepath.Join(subDir, "nested.json"), validData, 0644)
+
+	synth := NewFileSynthesizer()
+	ctx := &SynthesisContext{
+		Config:      &config.Config{},
+		AuthDir:     tempDir,
+		Now:         time.Now(),
+		IDGenerator: NewStableIDGenerator(),
+	}
+
+	auths, err := synth.Synthesize(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(auths) != 2 {
+		t.Fatalf("expected 2 auths, got %d", len(auths))
+	}
+	ids := map[string]bool{}
+	for _, auth := range auths {
+		ids[auth.ID] = true
+	}
+	if !ids["valid.json"] || !ids[filepath.Join("subdir", "nested.json")] {
+		t.Fatalf("expected root and nested auth IDs, got %v", ids)
+	}
+}
+
+func TestFileSynthesizer_Synthesize_SubdirsMode(t *testing.T) {
+	tempDir := t.TempDir()
+	vaultDir := filepath.Join(tempDir, "vaultt")
+	otherDir := filepath.Join(tempDir, "other")
+	if err := os.MkdirAll(vaultDir, 0o755); err != nil {
+		t.Fatalf("failed to create vault dir: %v", err)
+	}
+	if err := os.MkdirAll(otherDir, 0o755); err != nil {
+		t.Fatalf("failed to create other dir: %v", err)
+	}
+	validData, _ := json.Marshal(map[string]any{"type": "codex", "email": "vault@example.com"})
+	_ = os.WriteFile(filepath.Join(tempDir, "root.json"), validData, 0o644)
+	_ = os.WriteFile(filepath.Join(vaultDir, "aaabbb.json"), validData, 0o644)
+	_ = os.WriteFile(filepath.Join(otherDir, "ignored.json"), validData, 0o644)
+
+	synth := NewFileSynthesizer()
+	ctx := &SynthesisContext{
+		Config:      &config.Config{AuthScanMode: "subdirs", AuthScanDirs: []string{"vaultt"}},
+		AuthDir:     tempDir,
+		Now:         time.Now(),
+		IDGenerator: NewStableIDGenerator(),
+	}
+
+	auths, err := synth.Synthesize(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(auths) != 1 {
+		t.Fatalf("expected 1 auth, got %d", len(auths))
+	}
+	if auths[0].ID != filepath.Join("vaultt", "aaabbb.json") {
+		t.Fatalf("unexpected auth ID: %s", auths[0].ID)
+	}
+}
+
+func TestFileSynthesizer_Synthesize_SubdirsModeFollowsExplicitSymlink(t *testing.T) {
+	tempDir := t.TempDir()
+	realDir := filepath.Join(tempDir, "real-vault")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatalf("failed to create real dir: %v", err)
+	}
+	linkDir := filepath.Join(tempDir, "vault-link")
+	if err := os.Symlink(realDir, linkDir); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	validData, _ := json.Marshal(map[string]any{"type": "codex", "email": "link@example.com"})
+	_ = os.WriteFile(filepath.Join(realDir, "linked.json"), validData, 0o644)
+
+	synth := NewFileSynthesizer()
+	ctx := &SynthesisContext{
+		Config:      &config.Config{AuthScanMode: "subdirs", AuthScanDirs: []string{"vault-link"}},
+		AuthDir:     tempDir,
+		Now:         time.Now(),
+		IDGenerator: NewStableIDGenerator(),
+	}
+
+	auths, err := synth.Synthesize(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(auths) != 1 {
+		t.Fatalf("expected 1 auth, got %d", len(auths))
+	}
+	if auths[0].ID != filepath.Join("vault-link", "linked.json") {
+		t.Fatalf("unexpected auth ID: %s", auths[0].ID)
+	}
+}
+
+func TestFileSynthesizer_Synthesize_RecursiveModeSkipsSymlinkDirectories(t *testing.T) {
+	tempDir := t.TempDir()
+	realDir := filepath.Join(tempDir, "real-vault")
+	if err := os.MkdirAll(realDir, 0o755); err != nil {
+		t.Fatalf("failed to create real dir: %v", err)
+	}
+	linkDir := filepath.Join(tempDir, "vault-link")
+	if err := os.Symlink(realDir, linkDir); err != nil {
+		t.Skipf("symlink not supported: %v", err)
+	}
+	validData, _ := json.Marshal(map[string]any{"type": "codex", "email": "link@example.com"})
+	_ = os.WriteFile(filepath.Join(realDir, "linked.json"), validData, 0o644)
 
 	synth := NewFileSynthesizer()
 	ctx := &SynthesisContext{
@@ -226,7 +332,10 @@ func TestFileSynthesizer_Synthesize_SkipsDirectories(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(auths) != 1 {
-		t.Fatalf("expected 1 auth, got %d", len(auths))
+		t.Fatalf("expected only real directory auth, got %d", len(auths))
+	}
+	if auths[0].ID != filepath.Join("real-vault", "linked.json") {
+		t.Fatalf("unexpected auth ID: %s", auths[0].ID)
 	}
 }
 

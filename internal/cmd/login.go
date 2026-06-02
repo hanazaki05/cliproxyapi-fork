@@ -192,6 +192,9 @@ func DoLogin(cfg *config.Config, projectID string, options *LoginOptions) {
 	if setter, okSetter := store.(interface{ SetBaseDir(string) }); okSetter && cfg != nil {
 		setter.SetBaseDir(cfg.AuthDir)
 	}
+	if setter, okSetter := store.(interface{ SetConfig(*config.Config) }); okSetter && cfg != nil {
+		setter.SetConfig(cfg)
+	}
 
 	savedPath, errSave := store.Save(ctx, record)
 	if errSave != nil {

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/authscan"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -33,11 +34,25 @@ func (w *Watcher) start(ctx context.Context) error {
 	}
 	log.Debugf("watching config file: %s", w.configPath)
 
-	if errAddAuthDir := w.watcher.Add(w.authDir); errAddAuthDir != nil {
-		log.Errorf("failed to watch auth directory %s: %v", w.authDir, errAddAuthDir)
-		return errAddAuthDir
+	dirs, warnings := authscan.WatchDirs(w.config, w.authDir)
+	for _, warning := range warnings {
+		log.Warn(warning)
 	}
-	log.Debugf("watching auth directory: %s", w.authDir)
+	if len(dirs) == 0 {
+		if errAddAuthDir := w.watcher.Add(w.authDir); errAddAuthDir != nil {
+			log.Errorf("failed to watch auth directory %s: %v", w.authDir, errAddAuthDir)
+			return errAddAuthDir
+		}
+		log.Debugf("watching auth directory: %s", w.authDir)
+	} else {
+		for _, dir := range dirs {
+			if errAddAuthDir := w.watcher.Add(dir); errAddAuthDir != nil {
+				log.Errorf("failed to watch auth directory %s: %v", dir, errAddAuthDir)
+				return errAddAuthDir
+			}
+			log.Debugf("watching auth directory: %s", dir)
+		}
+	}
 
 	go w.processEvents(ctx)
 
@@ -69,10 +84,9 @@ func (w *Watcher) handleEvent(event fsnotify.Event) {
 	configOps := fsnotify.Write | fsnotify.Create | fsnotify.Rename
 	normalizedName := w.normalizeAuthPath(event.Name)
 	normalizedConfigPath := w.normalizeAuthPath(w.configPath)
-	normalizedAuthDir := w.normalizeAuthPath(w.authDir)
 	isConfigEvent := normalizedName == normalizedConfigPath && event.Op&configOps != 0
 	authOps := fsnotify.Create | fsnotify.Write | fsnotify.Remove | fsnotify.Rename
-	isAuthJSON := filepath.Dir(normalizedName) == normalizedAuthDir && strings.HasSuffix(normalizedName, ".json") && event.Op&authOps != 0
+	isAuthJSON := strings.HasSuffix(normalizedName, ".json") && event.Op&authOps != 0 && authscan.ContainsFile(w.config, w.authDir, event.Name)
 	if !isConfigEvent && !isAuthJSON {
 		// Ignore unrelated files (e.g., cookie snapshots *.cookie) and other noise.
 		return

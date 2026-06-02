@@ -127,6 +127,40 @@ func TestListAuthFilesFromDisk_IncludesWebsockets(t *testing.T) {
 	}
 }
 
+func TestListAuthFilesFromDisk_SubdirsMode(t *testing.T) {
+	t.Setenv("MANAGEMENT_PASSWORD", "")
+	gin.SetMode(gin.TestMode)
+
+	authDir := t.TempDir()
+	vaultDir := filepath.Join(authDir, "vaultt")
+	otherDir := filepath.Join(authDir, "other")
+	if err := os.MkdirAll(vaultDir, 0o755); err != nil {
+		t.Fatalf("failed to create vault dir: %v", err)
+	}
+	if err := os.MkdirAll(otherDir, 0o755); err != nil {
+		t.Fatalf("failed to create other dir: %v", err)
+	}
+	if errWrite := os.WriteFile(filepath.Join(authDir, "root.json"), []byte(`{"type":"codex","email":"root@example.com"}`), 0o600); errWrite != nil {
+		t.Fatalf("failed to write root auth file: %v", errWrite)
+	}
+	if errWrite := os.WriteFile(filepath.Join(vaultDir, "aaabbb.json"), []byte(`{"type":"codex","email":"vault@example.com"}`), 0o600); errWrite != nil {
+		t.Fatalf("failed to write vault auth file: %v", errWrite)
+	}
+	if errWrite := os.WriteFile(filepath.Join(otherDir, "ignored.json"), []byte(`{"type":"codex","email":"ignored@example.com"}`), 0o600); errWrite != nil {
+		t.Fatalf("failed to write ignored auth file: %v", errWrite)
+	}
+
+	h := NewHandlerWithoutConfigFilePath(&config.Config{AuthDir: authDir, AuthScanMode: "subdirs", AuthScanDirs: []string{"vaultt"}}, nil)
+
+	entry := firstAuthFileEntry(t, h)
+	if got := entry["name"]; got != filepath.Join("vaultt", "aaabbb.json") {
+		t.Fatalf("expected vault auth name, got %#v", got)
+	}
+	if got := entry["email"]; got != "vault@example.com" {
+		t.Fatalf("expected vault email, got %#v", got)
+	}
+}
+
 func firstAuthFileEntry(t *testing.T, h *Handler) map[string]any {
 	t.Helper()
 

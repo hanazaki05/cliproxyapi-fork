@@ -35,6 +35,13 @@ remote-management:
 # Authentication directory (supports ~ for home directory)
 auth-dir: "~/.cli-proxy-api"
 
+# Auth file scan mode. "recursive" scans all normal directories under auth-dir
+# without following symlink directories. "subdirs" scans only auth-scan-dirs.
+# Explicit auth-scan-dirs may be symlink directories and will be followed.
+# auth-scan-mode: "recursive"
+# auth-scan-dirs:
+#   - "vaultt"
+
 # API keys for authentication
 api-keys:
   - "your-api-key-1"

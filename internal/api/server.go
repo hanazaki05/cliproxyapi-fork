@@ -1480,6 +1480,9 @@ func (s *Server) UpdateClients(cfg *config.Config) {
 		if dirSetter, ok := tokenStore.(interface{ SetBaseDir(string) }); ok {
 			dirSetter.SetBaseDir(cfg.AuthDir)
 		}
+		if cfgSetter, ok := tokenStore.(interface{ SetConfig(*config.Config) }); ok {
+			cfgSetter.SetConfig(cfg)
+		}
 		authEntries = util.CountAuthFiles(context.Background(), tokenStore)
 	}
 	geminiAPIKeyCount := len(cfg.GeminiKey)

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/fs"
 	"net/http"
 	"net/url"
 	"os"
@@ -15,6 +14,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/authscan"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	cliproxyauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
 
@@ -23,6 +24,7 @@ type FileTokenStore struct {
 	mu      sync.Mutex
 	dirLock sync.RWMutex
 	baseDir string
+	config  *config.Config
 }
 
 // NewFileTokenStore creates a token store that saves credentials to disk through the
@@ -35,6 +37,12 @@ func NewFileTokenStore() *FileTokenStore {
 func (s *FileTokenStore) SetBaseDir(dir string) {
 	s.dirLock.Lock()
 	s.baseDir = strings.TrimSpace(dir)
+	s.dirLock.Unlock()
+}
+
+func (s *FileTokenStore) SetConfig(cfg *config.Config) {
+	s.dirLock.Lock()
+	s.config = cfg
 	s.dirLock.Unlock()
 }
 
@@ -126,34 +134,23 @@ func (s *FileTokenStore) Save(ctx context.Context, auth *cliproxyauth.Auth) (str
 	return path, nil
 }
 
-// List enumerates all auth JSON files under the configured directory.
+// List enumerates configured auth JSON files under the configured directory.
 func (s *FileTokenStore) List(ctx context.Context) ([]*cliproxyauth.Auth, error) {
 	dir := s.baseDirSnapshot()
 	if dir == "" {
 		return nil, fmt.Errorf("auth filestore: directory not configured")
 	}
-	entries := make([]*cliproxyauth.Auth, 0)
-	err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() {
-			return nil
-		}
-		if !strings.HasSuffix(strings.ToLower(d.Name()), ".json") {
-			return nil
-		}
-		auth, err := s.readAuthFile(path, dir)
+	cfg := s.configSnapshot()
+	files, _ := authscan.ListFiles(cfg, dir)
+	entries := make([]*cliproxyauth.Auth, 0, len(files))
+	for _, file := range files {
+		auth, err := s.readAuthFile(file.Path, file.ID)
 		if err != nil {
-			return nil
+			continue
 		}
 		if auth != nil {
 			entries = append(entries, auth)
 		}
-		return nil
-	})
-	if err != nil {
-		return nil, err
 	}
 	return entries, nil
 }
@@ -185,7 +182,7 @@ func (s *FileTokenStore) resolveDeletePath(id string) (string, error) {
 	return filepath.Join(dir, id), nil
 }
 
-func (s *FileTokenStore) readAuthFile(path, baseDir string) (*cliproxyauth.Auth, error) {
+func (s *FileTokenStore) readAuthFile(path, id string) (*cliproxyauth.Auth, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, fmt.Errorf("read file: %w", err)
@@ -235,7 +232,9 @@ func (s *FileTokenStore) readAuthFile(path, baseDir string) (*cliproxyauth.Auth,
 	if err != nil {
 		return nil, fmt.Errorf("stat file: %w", err)
 	}
-	id := s.idFor(path, baseDir)
+	if strings.TrimSpace(id) == "" {
+		id = s.idFor(path, s.baseDirSnapshot())
+	}
 	disabled, _ := metadata["disabled"].(bool)
 	status := cliproxyauth.StatusActive
 	if disabled {
@@ -327,6 +326,12 @@ func (s *FileTokenStore) baseDirSnapshot() string {
 	s.dirLock.RLock()
 	defer s.dirLock.RUnlock()
 	return s.baseDir
+}
+
+func (s *FileTokenStore) configSnapshot() *config.Config {
+	s.dirLock.RLock()
+	defer s.dirLock.RUnlock()
+	return s.config
 }
 
 func extractAccessToken(metadata map[string]any) string {

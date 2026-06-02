@@ -46,6 +46,14 @@ type Config struct {
 	// AuthDir is the directory where authentication token files are stored.
 	AuthDir string `yaml:"auth-dir" json:"-"`
 
+	// AuthScanMode controls how file-backed auth JSON files are discovered.
+	// Supported values: "recursive" (default) and "subdirs".
+	AuthScanMode string `yaml:"auth-scan-mode,omitempty" json:"-"`
+
+	// AuthScanDirs restricts file-backed auth scanning to these directories when
+	// AuthScanMode is "subdirs". Relative paths are resolved under AuthDir.
+	AuthScanDirs []string `yaml:"auth-scan-dirs,omitempty" json:"-"`
+
 	// Debug enables or disables debug-level logging and other debug features.
 	Debug bool `yaml:"debug" json:"debug"`
 

@@ -182,6 +182,9 @@ func main() {
 	if dirSetter, ok := tokenStore.(interface{ SetBaseDir(string) }); ok {
 		dirSetter.SetBaseDir(cfg.AuthDir)
 	}
+	if cfgSetter, ok := tokenStore.(interface{ SetConfig(*config.Config) }); ok {
+		cfgSetter.SetConfig(cfg)
+	}
 	core := coreauth.NewManager(tokenStore, nil, nil)
 	core.RegisterExecutor(MyExecutor{})
 

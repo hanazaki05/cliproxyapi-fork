@@ -28,6 +28,8 @@ import (
 	geminiAuth "github.com/router-for-me/CLIProxyAPI/v7/internal/auth/gemini"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/auth/kimi"
 	xaiauth "github.com/router-for-me/CLIProxyAPI/v7/internal/auth/xai"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/authscan"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/misc"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
@@ -310,26 +312,17 @@ func (h *Handler) GetAuthFileModels(c *gin.Context) {
 
 // List auth files from disk when the auth manager is unavailable.
 func (h *Handler) listAuthFilesFromDisk(c *gin.Context) {
-	entries, err := os.ReadDir(h.cfg.AuthDir)
-	if err != nil {
-		c.JSON(500, gin.H{"error": fmt.Sprintf("failed to read auth dir: %v", err)})
-		return
+	scannedFiles, warnings := authscan.ListFiles(h.cfg, h.cfg.AuthDir)
+	for _, warning := range warnings {
+		log.Warn(warning)
 	}
 	files := make([]gin.H, 0)
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		if !strings.HasSuffix(strings.ToLower(name), ".json") {
-			continue
-		}
-		if info, errInfo := e.Info(); errInfo == nil {
-			fileData := gin.H{"name": name, "size": info.Size(), "modtime": info.ModTime()}
+	for _, file := range scannedFiles {
+		if info, errInfo := os.Stat(file.Path); errInfo == nil {
+			fileData := gin.H{"name": file.ID, "size": info.Size(), "modtime": info.ModTime(), "path": file.Path}
 
 			// Read file to get type field
-			full := filepath.Join(h.cfg.AuthDir, name)
-			if data, errRead := os.ReadFile(full); errRead == nil {
+			if data, errRead := os.ReadFile(file.Path); errRead == nil {
 				typeValue := gjson.GetBytes(data, "type").String()
 				emailValue := gjson.GetBytes(data, "email").String()
 				fileData["type"] = typeValue
@@ -744,27 +737,19 @@ func (h *Handler) DeleteAuthFile(c *gin.Context) {
 	}
 	ctx := c.Request.Context()
 	if all := c.Query("all"); all == "true" || all == "1" || all == "*" {
-		entries, err := os.ReadDir(h.cfg.AuthDir)
-		if err != nil {
-			c.JSON(500, gin.H{"error": fmt.Sprintf("failed to read auth dir: %v", err)})
-			return
+		files, warnings := authscan.ListFiles(h.cfg, h.cfg.AuthDir)
+		for _, warning := range warnings {
+			log.Warn(warning)
 		}
 		deleted := 0
-		for _, e := range entries {
-			if e.IsDir() {
-				continue
-			}
-			name := e.Name()
-			if !strings.HasSuffix(strings.ToLower(name), ".json") {
-				continue
-			}
-			full := filepath.Join(h.cfg.AuthDir, name)
+		for _, file := range files {
+			full := file.Path
 			if !filepath.IsAbs(full) {
 				if abs, errAbs := filepath.Abs(full); errAbs == nil {
 					full = abs
 				}
 			}
-			if err = os.Remove(full); err == nil {
+			if errRemove := os.Remove(full); errRemove == nil {
 				if errDel := h.deleteTokenRecord(ctx, full); errDel != nil {
 					c.JSON(500, gin.H{"error": errDel.Error()})
 					return
@@ -1610,6 +1595,9 @@ func (h *Handler) tokenStoreWithBaseDir() coreauth.Store {
 	if h.cfg != nil {
 		if dirSetter, ok := store.(interface{ SetBaseDir(string) }); ok {
 			dirSetter.SetBaseDir(h.cfg.AuthDir)
+		}
+		if cfgSetter, ok := store.(interface{ SetConfig(*config.Config) }); ok {
+			cfgSetter.SetConfig(h.cfg)
 		}
 	}
 	return store
