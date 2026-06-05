@@ -69,6 +69,25 @@ func TestWriteErrorResponse_AddonHeadersEnabled(t *testing.T) {
 	}
 }
 
+func TestWriteErrorResponse_ClientCanceledUses499WithoutBody(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+
+	handler := NewBaseAPIHandlers(nil, nil)
+	handler.WriteErrorResponse(c, &interfaces.ErrorMessage{
+		Error: errors.New(`Post "https://example.test/responses": context canceled`),
+	})
+
+	if status := c.Writer.Status(); status != StatusClientClosedRequest {
+		t.Fatalf("status = %d, want %d", status, StatusClientClosedRequest)
+	}
+	if body := recorder.Body.String(); body != "" {
+		t.Fatalf("expected empty body for client cancellation, got %q", body)
+	}
+}
+
 func TestEnrichAuthSelectionError_DefaultsTo503WithContext(t *testing.T) {
 	in := &coreauth.Error{Code: "auth_not_found", Message: "no auth available"}
 	out := enrichAuthSelectionError(in, []string{"claude"}, "claude-sonnet-4-6")

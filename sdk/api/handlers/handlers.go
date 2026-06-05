@@ -52,6 +52,7 @@ const idempotencyKeyMetadataKey = "idempotency_key"
 const (
 	defaultStreamingKeepAliveSeconds = 0
 	defaultStreamingBootstrapRetries = 0
+	StatusClientClosedRequest        = 499
 )
 
 type pinnedAuthContextKey struct{}
@@ -714,10 +715,8 @@ func (h *BaseAPIHandler) executeStreamWithAuthManager(ctx context.Context, handl
 		err = enrichAuthSelectionError(err, providers, normalizedModel)
 		errChan := make(chan *interfaces.ErrorMessage, 1)
 		status := http.StatusInternalServerError
-		if se, ok := err.(interface{ StatusCode() int }); ok && se != nil {
-			if code := se.StatusCode(); code > 0 {
-				status = code
-			}
+		if code := statusFromError(err); code > 0 {
+			status = code
 		}
 		var addon http.Header
 		if he, ok := err.(interface{ Headers() http.Header }); ok && he != nil {
@@ -826,10 +825,8 @@ func (h *BaseAPIHandler) executeStreamWithAuthManager(ctx context.Context, handl
 					}
 
 					status := http.StatusInternalServerError
-					if se, ok := streamErr.(interface{ StatusCode() int }); ok && se != nil {
-						if code := se.StatusCode(); code > 0 {
-							status = code
-						}
+					if code := statusFromError(streamErr); code > 0 {
+						status = code
 					}
 					var addon http.Header
 					if he, ok := streamErr.(interface{ Headers() http.Header }); ok && he != nil {
@@ -891,12 +888,39 @@ func statusFromError(err error) int {
 	if err == nil {
 		return 0
 	}
+	if IsClientCanceledError(err) {
+		return StatusClientClosedRequest
+	}
 	if se, ok := err.(interface{ StatusCode() int }); ok && se != nil {
 		if code := se.StatusCode(); code > 0 {
 			return code
 		}
 	}
 	return 0
+}
+
+func IsClientCanceledError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	lower := strings.ToLower(strings.TrimSpace(err.Error()))
+	return strings.Contains(lower, "context canceled") ||
+		strings.Contains(lower, "context deadline exceeded") ||
+		strings.Contains(lower, "client canceled") ||
+		strings.Contains(lower, "client cancelled")
+}
+
+func IsClientCanceledErrorMessage(msg *interfaces.ErrorMessage) bool {
+	if msg == nil {
+		return false
+	}
+	if msg.StatusCode == StatusClientClosedRequest {
+		return true
+	}
+	return IsClientCanceledError(msg.Error)
 }
 
 func (h *BaseAPIHandler) getRequestDetails(modelName string) (providers []string, normalizedModel string, err *interfaces.ErrorMessage) {
@@ -1048,6 +1072,10 @@ func (h *BaseAPIHandler) WriteErrorResponse(c *gin.Context, msg *interfaces.Erro
 	status := http.StatusInternalServerError
 	if msg != nil && msg.StatusCode > 0 {
 		status = msg.StatusCode
+	}
+	if IsClientCanceledErrorMessage(msg) {
+		c.Status(StatusClientClosedRequest)
+		return
 	}
 	if msg != nil && msg.Addon != nil && PassthroughHeadersEnabled(h.Cfg) {
 		for key, values := range msg.Addon {

@@ -80,6 +80,13 @@ func (h *BaseAPIHandler) ForwardStream(c *gin.Context, flusher http.Flusher, can
 					}
 				}
 				if terminalErr != nil {
+					if IsClientCanceledErrorMessage(terminalErr) {
+						if !c.Writer.Written() {
+							c.Status(StatusClientClosedRequest)
+						}
+						cancel(terminalErr.Error)
+						return
+					}
 					if opts.WriteTerminalError != nil {
 						opts.WriteTerminalError(terminalErr)
 					}
@@ -102,6 +109,13 @@ func (h *BaseAPIHandler) ForwardStream(c *gin.Context, flusher http.Flusher, can
 			}
 			if errMsg != nil {
 				terminalErr = errMsg
+				if IsClientCanceledErrorMessage(errMsg) {
+					if !c.Writer.Written() {
+						c.Status(StatusClientClosedRequest)
+					}
+					cancel(errMsg.Error)
+					return
+				}
 				if opts.WriteTerminalError != nil {
 					opts.WriteTerminalError(errMsg)
 					flusher.Flush()
