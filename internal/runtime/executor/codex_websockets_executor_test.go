@@ -178,8 +178,13 @@ func TestApplyCodexWebsocketHeadersDefaultsToCurrentResponsesBeta(t *testing.T) 
 	if got := headers.Get("x-codex-beta-features"); got != "" {
 		t.Fatalf("x-codex-beta-features = %q, want empty", got)
 	}
-	if got := headers.Get("Session_id"); got != "" {
-		t.Fatalf("Session_id = %q, want empty", got)
+	if got := headers["session-id"]; len(got) == 0 || got[0] == "" {
+		t.Fatalf("session-id is empty: %#v", got)
+	}
+	for _, legacyKey := range []string{"Session_id", "session_id", "Session-Id"} {
+		if got := headers[legacyKey]; len(got) != 0 {
+			t.Fatalf("%s = %#v, want empty", legacyKey, got)
+		}
 	}
 	if got := headers.Get("X-Codex-Turn-Metadata"); got != "" {
 		t.Fatalf("X-Codex-Turn-Metadata = %q, want empty", got)
@@ -200,7 +205,7 @@ func TestApplyCodexWebsocketHeadersPassesThroughClientIdentityHeaders(t *testing
 		"Version":               "0.115.0-alpha.27",
 		"X-Codex-Turn-Metadata": `{"turn_id":"turn-1"}`,
 		"X-Client-Request-Id":   "019d2233-e240-7162-992d-38df0a2a0e0d",
-		"session_id":            "legacy-session",
+		"session-id":            "legacy-session",
 	})
 
 	headers := applyCodexWebsocketHeaders(ctx, http.Header{}, auth, "", nil)
@@ -220,11 +225,36 @@ func TestApplyCodexWebsocketHeadersPassesThroughClientIdentityHeaders(t *testing
 	if got := headers.Get("X-Client-Request-Id"); got != "019d2233-e240-7162-992d-38df0a2a0e0d" {
 		t.Fatalf("X-Client-Request-Id = %s, want %s", got, "019d2233-e240-7162-992d-38df0a2a0e0d")
 	}
-	if got := headerValueCaseInsensitive(headers, "session_id"); got != "legacy-session" {
-		t.Fatalf("session_id = %s, want legacy-session", got)
+	if got := headers["session-id"]; len(got) != 1 || got[0] != "legacy-session" {
+		t.Fatalf("session-id = %#v, want [legacy-session]", got)
 	}
-	if _, ok := headers["session_id"]; !ok {
-		t.Fatalf("expected lowercase session_id header key, got %#v", headers)
+	for _, legacyKey := range []string{"Session_id", "session_id", "Session-Id"} {
+		if got := headers[legacyKey]; len(got) != 0 {
+			t.Fatalf("%s = %#v, want empty", legacyKey, got)
+		}
+	}
+}
+
+func TestApplyCodexWebsocketHeadersCanonicalizesLegacyUnderscoreSessionHeader(t *testing.T) {
+	auth := &cliproxyauth.Auth{
+		Provider: "codex",
+		Metadata: map[string]any{"email": "user@example.com"},
+	}
+	ctx := contextWithGinHeaders(map[string]string{
+		"Originator": "Codex Desktop",
+		"User-Agent": "codex_cli_rs/0.1.0",
+		"Session_id": "legacy-underscore-session",
+	})
+
+	headers := applyCodexWebsocketHeaders(ctx, http.Header{}, auth, "", nil)
+
+	if got := headers["session-id"]; len(got) != 1 || got[0] != "legacy-underscore-session" {
+		t.Fatalf("session-id = %#v, want [legacy-underscore-session]", got)
+	}
+	for _, legacyKey := range []string{"Session_id", "session_id", "Session-Id"} {
+		if got := headers[legacyKey]; len(got) != 0 {
+			t.Fatalf("%s = %#v, want empty", legacyKey, got)
+		}
 	}
 	if got := headers.Get("X-Codex-Turn-State"); got != "" {
 		t.Fatalf("X-Codex-Turn-State = %s, want empty", got)
@@ -253,8 +283,8 @@ func TestApplyCodexWebsocketHeadersRequestAlignCodexPassesCodexState(t *testing.
 
 	headers := applyCodexWebsocketHeaders(ctx, http.Header{}, auth, "", &config.Config{RequestAlignCodex: true})
 
-	if got := headers.Get("Session_id"); got != "019d2233-e240-7162-992d-38df0a2a0e0d" {
-		t.Fatalf("Session_id = %s, want request id", got)
+	if got := headers["session-id"]; len(got) != 1 || got[0] != "019d2233-e240-7162-992d-38df0a2a0e0d" {
+		t.Fatalf("session-id = %#v, want request id", got)
 	}
 	if got := gjson.Get(headers.Get("X-Codex-Turn-Metadata"), "turn_id").String(); got != "turn-1" {
 		t.Fatalf("turn_id = %s, want turn-1", got)
@@ -409,19 +439,80 @@ func TestApplyCodexWebsocketHeadersUsesCanonicalAccountHeader(t *testing.T) {
 	}
 }
 
-func TestApplyCodexPromptCacheHeadersSetsLowercaseSessionAndLegacyConversation(t *testing.T) {
+func TestApplyCodexPromptCacheHeadersSetsSessionIDAndLegacyConversation(t *testing.T) {
 	req := cliproxyexecutor.Request{Model: "gpt-5-codex", Payload: []byte(`{"prompt_cache_key":"cache-1"}`)}
 
 	_, headers := applyCodexPromptCacheHeaders(context.Background(), cliproxyexecutor.Options{}, sdktranslator.FromString("openai-response"), req, []byte(`{"model":"gpt-5-codex"}`), nil)
 
-	if got := headerValueCaseInsensitive(headers, "session_id"); got != "cache-1" {
-		t.Fatalf("session_id = %s, want cache-1", got)
+	if got := headers["session-id"]; len(got) != 1 || got[0] != "cache-1" {
+		t.Fatalf("session-id = %#v, want [cache-1]", got)
 	}
-	if _, ok := headers["session_id"]; !ok {
-		t.Fatalf("expected lowercase session_id key, got %#v", headers)
+	for _, legacyKey := range []string{"Session_id", "session_id", "Session-Id"} {
+		if got := headers[legacyKey]; len(got) != 0 {
+			t.Fatalf("%s = %#v, want empty", legacyKey, got)
+		}
 	}
 	if got := headers.Get("Conversation_id"); got != "cache-1" {
 		t.Fatalf("Conversation_id = %s, want cache-1", got)
+	}
+}
+
+func TestApplyCodexPromptCacheHeadersClaudeUsesClaudeCodeSessionID(t *testing.T) {
+	firstReq := cliproxyexecutor.Request{
+		Model: "gpt-5-codex-claude-ws-cache-session",
+		Payload: []byte(`{
+			"metadata":{"user_id":"{\"device_id\":\"device-a\",\"account_uuid\":\"\",\"session_id\":\"ws-cache-session-1\"}"},
+			"messages":[{"role":"user","content":[{"type":"text","text":"first"}]}]
+		}`),
+	}
+	secondReq := cliproxyexecutor.Request{
+		Model: "gpt-5-codex-claude-ws-cache-session",
+		Payload: []byte(`{
+			"metadata":{"user_id":"{\"device_id\":\"device-b\",\"account_uuid\":\"\",\"session_id\":\"ws-cache-session-1\"}"},
+			"messages":[{"role":"user","content":[{"type":"text","text":"next"}]}]
+		}`),
+	}
+
+	firstBody, firstHeaders := applyCodexPromptCacheHeaders(context.Background(), cliproxyexecutor.Options{}, sdktranslator.FromString("claude"), firstReq, []byte(`{"model":"gpt-5-codex"}`), nil)
+	secondBody, secondHeaders := applyCodexPromptCacheHeaders(context.Background(), cliproxyexecutor.Options{}, sdktranslator.FromString("claude"), secondReq, []byte(`{"model":"gpt-5-codex"}`), nil)
+
+	firstKey := gjson.GetBytes(firstBody, "prompt_cache_key").String()
+	secondKey := gjson.GetBytes(secondBody, "prompt_cache_key").String()
+	if firstKey == "" {
+		t.Fatalf("first prompt_cache_key is empty; body=%s", string(firstBody))
+	}
+	if secondKey != firstKey {
+		t.Fatalf("same Claude Code session_id produced different websocket prompt_cache_key: first=%q second=%q", firstKey, secondKey)
+	}
+	if got := firstHeaders["session-id"]; len(got) != 1 || got[0] != firstKey {
+		t.Fatalf("first session-id = %#v, want [%q]", got, firstKey)
+	}
+	if got := secondHeaders["session-id"]; len(got) != 1 || got[0] != firstKey {
+		t.Fatalf("second session-id = %#v, want [%q]", got, firstKey)
+	}
+}
+
+func TestApplyCodexPromptCacheHeadersClaudeRejectsBareUserID(t *testing.T) {
+	req := cliproxyexecutor.Request{
+		Model:   "gpt-5-codex-claude-ws-cache-bare-user",
+		Payload: []byte(`{"metadata":{"user_id":"same-user-across-chats"},"messages":[{"role":"user","content":[{"type":"text","text":"first"}]}]}`),
+	}
+
+	body, headers := applyCodexPromptCacheHeaders(context.Background(), cliproxyexecutor.Options{}, sdktranslator.FromString("claude"), req, []byte(`{"model":"gpt-5-codex"}`), nil)
+
+	if got := gjson.GetBytes(body, "prompt_cache_key").String(); got != "" {
+		t.Fatalf("bare metadata.user_id must not create websocket prompt_cache_key, got %q; body=%s", got, string(body))
+	}
+	if got := headers["session-id"]; len(got) != 0 {
+		t.Fatalf("bare metadata.user_id must not create websocket session-id, got %#v", got)
+	}
+	for _, legacyKey := range []string{"Session_id", "session_id", "Session-Id"} {
+		if got := headers[legacyKey]; len(got) != 0 {
+			t.Fatalf("bare metadata.user_id must not create websocket %s, got %#v", legacyKey, got)
+		}
+	}
+	if got := headers.Get("Conversation_id"); got != "" {
+		t.Fatalf("bare metadata.user_id must not create websocket Conversation_id, got %q", got)
 	}
 }
 
@@ -450,14 +541,19 @@ func TestApplyCodexWebsocketHeadersIdentityConfuseRemapsPromptCacheKey(t *testin
 	if gotKey := gjson.GetBytes(body, "prompt_cache_key").String(); gotKey != expectedPromptCacheKey {
 		t.Fatalf("prompt_cache_key = %q, want %q", gotKey, expectedPromptCacheKey)
 	}
-	if gotSession := headerValueCaseInsensitive(headers, "session_id"); gotSession != expectedPromptCacheKey {
-		t.Fatalf("session_id = %q, want %q", gotSession, expectedPromptCacheKey)
+	if gotSession := headers["session-id"]; len(gotSession) != 1 || gotSession[0] != expectedPromptCacheKey {
+		t.Fatalf("session-id = %#v, want [%q]", gotSession, expectedPromptCacheKey)
 	}
-	if gotRequestID := headers.Get("X-Client-Request-Id"); gotRequestID != expectedPromptCacheKey {
-		t.Fatalf("X-Client-Request-Id = %q, want %q", gotRequestID, expectedPromptCacheKey)
+	for _, legacyKey := range []string{"Session_id", "session_id", "Session-Id"} {
+		if gotLegacySession := headers[legacyKey]; len(gotLegacySession) != 0 {
+			t.Fatalf("%s = %#v, want empty", legacyKey, gotLegacySession)
+		}
 	}
-	if gotThreadID := headers.Get("Thread-Id"); gotThreadID != expectedPromptCacheKey {
-		t.Fatalf("Thread-Id = %q, want %q", gotThreadID, expectedPromptCacheKey)
+	if gotRequestID := headerValueCaseInsensitive(headers, "x-client-request-id"); gotRequestID != expectedPromptCacheKey {
+		t.Fatalf("x-client-request-id = %q, want %q", gotRequestID, expectedPromptCacheKey)
+	}
+	if gotThreadID := headerValueCaseInsensitive(headers, "thread-id"); gotThreadID != expectedPromptCacheKey {
+		t.Fatalf("thread-id = %q, want %q", gotThreadID, expectedPromptCacheKey)
 	}
 	if gotConversation := headers.Get("Conversation_id"); gotConversation != expectedPromptCacheKey {
 		t.Fatalf("Conversation_id = %q, want %q", gotConversation, expectedPromptCacheKey)
@@ -674,8 +770,8 @@ func TestApplyCodexHeadersPassesThroughClientIdentityHeaders(t *testing.T) {
 	if got := req.Header.Get("X-Client-Request-Id"); got != "019d2233-e240-7162-992d-38df0a2a0e0d" {
 		t.Fatalf("X-Client-Request-Id = %s, want %s", got, "019d2233-e240-7162-992d-38df0a2a0e0d")
 	}
-	if got := req.Header.Get("Session_id"); got == "" {
-		t.Fatal("Session_id is empty")
+	if got := req.Header["session-id"]; len(got) == 0 || got[0] == "" {
+		t.Fatalf("session-id is empty: %#v", got)
 	}
 	if got := req.Header.Get("X-Codex-Turn-State"); got != "" {
 		t.Fatalf("X-Codex-Turn-State = %s, want empty", got)
@@ -708,8 +804,8 @@ func TestApplyCodexHeadersRequestAlignCodexPassesCodexState(t *testing.T) {
 
 	applyCodexHeaders(req, auth, "oauth-token", true, &config.Config{RequestAlignCodex: true})
 
-	if got := req.Header.Get("Session_id"); got != "019d2233-e240-7162-992d-38df0a2a0e0d" {
-		t.Fatalf("Session_id = %s, want request id", got)
+	if got := req.Header["session-id"]; len(got) != 1 || got[0] != "019d2233-e240-7162-992d-38df0a2a0e0d" {
+		t.Fatalf("session-id = %#v, want request id", got)
 	}
 	if got := gjson.Get(req.Header.Get("X-Codex-Turn-Metadata"), "turn_id").String(); got != "turn-1" {
 		t.Fatalf("turn_id = %s, want turn-1", got)
@@ -736,8 +832,8 @@ func TestApplyCodexHeadersDoesNotInjectCodexRequestStateByDefault(t *testing.T) 
 
 	applyCodexHeaders(req, nil, "oauth-token", true, nil)
 
-	if got := req.Header.Get("Session_id"); got == "" {
-		t.Fatal("Session_id is empty")
+	if got := req.Header["session-id"]; len(got) == 0 || got[0] == "" {
+		t.Fatalf("session-id is empty: %#v", got)
 	}
 	if got := req.Header.Get("X-Client-Request-Id"); got != "" {
 		t.Fatalf("X-Client-Request-Id = %q, want empty", got)
@@ -755,11 +851,11 @@ func TestApplyCodexHeadersRequestAlignCodexInjectsCodexRequestState(t *testing.T
 
 	applyCodexHeaders(req, nil, "oauth-token", true, &config.Config{RequestAlignCodex: true})
 
-	if got := req.Header.Get("Session_id"); got == "" {
-		t.Fatal("Session_id is empty")
+	if got := req.Header["session-id"]; len(got) == 0 || got[0] == "" {
+		t.Fatalf("session-id is empty: %#v", got)
 	}
-	if got := req.Header.Get("X-Client-Request-Id"); got == "" {
-		t.Fatal("X-Client-Request-Id is empty")
+	if got := headerValueCaseInsensitive(req.Header, "x-client-request-id"); got == "" {
+		t.Fatal("x-client-request-id is empty")
 	}
 	if got := req.Header.Get("X-Codex-Turn-Metadata"); !gjson.Valid(got) {
 		t.Fatalf("X-Codex-Turn-Metadata = %q, want valid JSON", got)

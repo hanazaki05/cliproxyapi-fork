@@ -60,8 +60,11 @@ func applyCodexRequestStateHeaders(headers http.Header, state codexRequestState)
 	}
 	if state.ConversationID != "" {
 		headers.Set("Conversation_id", state.ConversationID)
-		headers.Set("Session_id", state.ConversationID)
-		headers.Set("X-Client-Request-Id", state.ConversationID)
+		setCodexSessionHeaderCasePreserved(headers, "session-id", state.ConversationID)
+		setHeaderCasePreserved(headers, "x-client-request-id", state.ConversationID)
+	}
+	if state.TurnID != "" {
+		setHeaderCasePreserved(headers, "thread-id", state.TurnID)
 	}
 	if state.TurnState != "" {
 		headers.Set("X-Codex-Turn-State", state.TurnState)
@@ -90,8 +93,8 @@ func ensureCodexConversationTurnHeaders(target http.Header, fallback http.Header
 		conversationID = uuid.NewString()
 	}
 	target.Set("Conversation_id", conversationID)
-	target.Set("Session_id", conversationID)
-	target.Set("X-Client-Request-Id", conversationID)
+	setCodexSessionHeaderCasePreserved(target, "session-id", conversationID)
+	setHeaderCasePreserved(target, "x-client-request-id", conversationID)
 
 	if turnState := resolveCodexTurnStateFromHeaders(target, fallback); turnState != "" {
 		target.Set("X-Codex-Turn-State", turnState)
@@ -114,6 +117,7 @@ func ensureCodexConversationTurnHeaders(target http.Header, fallback http.Header
 	if turnID == "" {
 		turnID = uuid.NewString()
 	}
+	setHeaderCasePreserved(target, "thread-id", turnID)
 	turnMetadata := resolveCodexTurnMetadataHeader(firstNonEmptyHeader(target, "X-Codex-Turn-Metadata", ""), conversationID, turnID)
 	if turnMetadata == "" {
 		turnMetadata = resolveCodexTurnMetadataHeader(firstNonEmptyHeader(fallback, "X-Codex-Turn-Metadata", ""), conversationID, turnID)
@@ -167,7 +171,7 @@ func resolveCodexConversationID(ctx context.Context, opts cliproxyexecutor.Optio
 }
 
 func resolveCodexConversationIDFromHeaders(primary http.Header, fallback http.Header) string {
-	for _, key := range []string{"Conversation_id", "Session_id", "X-Client-Request-Id"} {
+	for _, key := range []string{"Conversation_id", "session-id", "Session_id", "session_id", "Session-Id", "x-client-request-id", "X-Client-Request-Id"} {
 		if value := firstNonEmptyHeader(primary, key, ""); value != "" {
 			return value
 		}
