@@ -1484,6 +1484,9 @@ func (m *Manager) executeMixedOnce(ctx context.Context, providers []string, req 
 				if se, ok := errors.AsType[cliproxyexecutor.StatusError](errExec); ok && se != nil {
 					result.Error.HTTPStatus = se.StatusCode()
 				}
+				if isRequestScopedRetryError(errExec) {
+					result.Error.Code = "request_scoped_retry"
+				}
 				if ra := retryAfterFromError(errExec); ra != nil {
 					result.RetryAfter = ra
 				}
@@ -1607,6 +1610,9 @@ func (m *Manager) executeCountMixedOnce(ctx context.Context, providers []string,
 				result.Error = &Error{Message: errExec.Error()}
 				if se, ok := errors.AsType[cliproxyexecutor.StatusError](errExec); ok && se != nil {
 					result.Error.HTTPStatus = se.StatusCode()
+				}
+				if isRequestScopedRetryError(errExec) {
+					result.Error.Code = "request_scoped_retry"
 				}
 				if ra := retryAfterFromError(errExec); ra != nil {
 					result.RetryAfter = ra
@@ -2466,7 +2472,7 @@ func (m *Manager) MarkResult(ctx context.Context, result Result) {
 			}
 		} else {
 			if result.Model != "" {
-				if !isRequestScopedNotFoundResultError(result.Error) {
+				if !isRequestScopedNotFoundResultError(result.Error) && !isRequestScopedRetryResultError(result.Error) {
 					disableCooling := quotaCooldownDisabledForAuth(auth)
 					state := ensureModelState(auth, result.Model)
 					state.Unavailable = true
@@ -2844,6 +2850,17 @@ func retryAfterFromError(err error) *time.Duration {
 	return &value
 }
 
+func isRequestScopedRetryError(err error) bool {
+	if err == nil {
+		return false
+	}
+	type requestScopedRetry interface {
+		RequestScopedRetry() bool
+	}
+	var marker requestScopedRetry
+	return errors.As(err, &marker) && marker != nil && marker.RequestScopedRetry()
+}
+
 func statusCodeFromResult(err *Error) int {
 	if err == nil {
 		return 0
@@ -2968,6 +2985,10 @@ func isRequestScopedNotFoundResultError(err *Error) bool {
 	return isRequestScopedNotFoundMessage(err.Message)
 }
 
+func isRequestScopedRetryResultError(err *Error) bool {
+	return err != nil && strings.EqualFold(strings.TrimSpace(err.Code), "request_scoped_retry")
+}
+
 // isRequestInvalidError returns true if the error represents a client request
 // error that should not be retried. Specifically, it treats 400 responses with
 // "invalid_request_error", request-scoped 404 item misses caused by `store=false`,
@@ -3008,7 +3029,7 @@ func applyAuthFailureState(auth *Auth, resultErr *Error, retryAfter *time.Durati
 	if auth == nil {
 		return
 	}
-	if isRequestScopedNotFoundResultError(resultErr) {
+	if isRequestScopedNotFoundResultError(resultErr) || isRequestScopedRetryResultError(resultErr) {
 		return
 	}
 	disableCooling := quotaCooldownDisabledForAuth(auth)

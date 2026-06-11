@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	. "github.com/router-for-me/CLIProxyAPI/v7/internal/constant"
@@ -425,6 +426,9 @@ func (h *OpenAIResponsesAPIHandler) Compact(c *gin.Context) {
 	cliCtx, cliCancel := h.GetContextWithCancel(h, c, context.Background())
 	stopKeepAlive := h.StartNonStreamingKeepAlive(c, cliCtx)
 	resp, upstreamHeaders, errMsg := h.ExecuteWithAuthManager(cliCtx, h.HandlerType(), modelName, rawJSON, "responses/compact")
+	if errMsg != nil && shouldFallbackCompactToResponses(errMsg) {
+		resp, upstreamHeaders, errMsg = h.ExecuteWithAuthManager(cliCtx, h.HandlerType(), modelName, rawJSON, "")
+	}
 	stopKeepAlive()
 	if errMsg != nil {
 		h.WriteErrorResponse(c, errMsg)
@@ -434,6 +438,23 @@ func (h *OpenAIResponsesAPIHandler) Compact(c *gin.Context) {
 	handlers.WriteUpstreamHeaders(c.Writer.Header(), upstreamHeaders)
 	_, _ = c.Writer.Write(resp)
 	cliCancel()
+}
+
+func shouldFallbackCompactToResponses(errMsg *interfaces.ErrorMessage) bool {
+	if errMsg == nil || errMsg.Error == nil {
+		return false
+	}
+	status := errMsg.StatusCode
+	if status == http.StatusOK {
+		return false
+	}
+	if status >= http.StatusInternalServerError {
+		return true
+	}
+	statusText := strings.ToLower(strings.TrimSpace(errMsg.Error.Error()))
+	return status == http.StatusNotImplemented ||
+		status == http.StatusMethodNotAllowed ||
+		(status == http.StatusNotFound && strings.Contains(statusText, "compact"))
 }
 
 // handleNonStreamingResponse handles non-streaming chat completion responses

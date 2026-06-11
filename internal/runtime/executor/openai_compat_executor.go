@@ -798,3 +798,9 @@ func (e statusErr) Error() string {
 }
 func (e statusErr) StatusCode() int            { return e.code }
 func (e statusErr) RetryAfter() *time.Duration { return e.retryAfter }
+
+type compactRetryableStatusErr struct {
+	statusErr
+}
+
+func (e compactRetryableStatusErr) RequestScopedRetry() bool { return true }

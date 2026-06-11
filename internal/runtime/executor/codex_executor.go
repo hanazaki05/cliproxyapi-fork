@@ -774,17 +774,7 @@ func (e *CodexExecutor) HttpRequest(ctx context.Context, auth *cliproxyauth.Auth
 
 func (e *CodexExecutor) Execute(ctx context.Context, auth *cliproxyauth.Auth, req cliproxyexecutor.Request, opts cliproxyexecutor.Options) (resp cliproxyexecutor.Response, err error) {
 	if opts.Alt == "responses/compact" {
-		resp, err = e.executeCompact(ctx, auth, req, opts)
-		if err == nil {
-			return resp, nil
-		}
-		if se, ok := err.(statusErr); ok && se.code >= 500 {
-			helps.LogWithRequestID(ctx).Debugf("compact: upstream returned %d, falling back to non-compact streaming path", se.code)
-			fallbackOpts := opts
-			fallbackOpts.Alt = ""
-			return e.Execute(ctx, auth, req, fallbackOpts)
-		}
-		return resp, err
+		return e.executeCompact(ctx, auth, req, opts)
 	}
 	if isCodexOpenAIImageRequest(opts) {
 		return e.executeOpenAIImage(ctx, auth, req, opts)
@@ -1052,6 +1042,9 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 		helps.AppendAPIResponseChunk(ctx, e.cfg, b)
 		helps.LogWithRequestID(ctx).Debugf("request error, error status: %d, error message: %s", httpResp.StatusCode, helps.SummarizeErrorBody(httpResp.Header.Get("Content-Type"), b))
 		err = newCodexStatusErr(httpResp.StatusCode, b)
+		if se, ok := err.(statusErr); ok && se.code >= http.StatusInternalServerError {
+			err = compactRetryableStatusErr{statusErr: se}
+		}
 		return resp, err
 	}
 	data, err := io.ReadAll(httpResp.Body)
@@ -1066,14 +1059,14 @@ func (e *CodexExecutor) executeCompact(ctx context.Context, auth *cliproxyauth.A
 	if len(upstreamData) > 0 && !gjson.ValidBytes(upstreamData) {
 		helps.AppendAPIResponseChunk(ctx, e.cfg, upstreamData)
 		helps.LogWithRequestID(ctx).Debugf("compact: upstream returned non-JSON body (%d bytes), treating as 502", len(upstreamData))
-		return resp, newCodexStatusErr(http.StatusBadGateway, []byte(`{"error":{"message":"upstream returned non-JSON response for compact","type":"server_error"}}`))
+		return resp, compactRetryableStatusErr{statusErr: newCodexStatusErr(http.StatusBadGateway, []byte(`{"error":{"message":"upstream returned non-JSON response for compact","type":"server_error"}}`))}
 	}
 	// Also catch JSON error responses that the upstream returns with 200 status
 	// (e.g. new-api proxies returning {"error":{...}} with HTTP 200).
 	if errField := gjson.GetBytes(upstreamData, "error"); errField.Exists() {
 		helps.AppendAPIResponseChunk(ctx, e.cfg, upstreamData)
 		helps.LogWithRequestID(ctx).Debugf("compact: upstream returned error in 200 body: %s", errField.Raw)
-		return resp, newCodexStatusErr(http.StatusBadGateway, upstreamData)
+		return resp, compactRetryableStatusErr{statusErr: newCodexStatusErr(http.StatusBadGateway, upstreamData)}
 	}
 	helps.AppendAPIResponseChunk(ctx, e.cfg, upstreamData)
 	reporter.Publish(ctx, helps.ParseOpenAIUsage(upstreamData))
