@@ -25,6 +25,14 @@ import (
 	"github.com/tidwall/sjson"
 )
 
+const (
+	compactRouteHeader       = "X-CLIProxyAPI-Compact-Route"
+	compactFallbackHeader    = "X-CLIProxyAPI-Compact-Fallback"
+	compactFallbackFromValue = "responses/compact"
+	compactRouteValue        = "responses/compact"
+	responsesRouteValue      = "responses"
+)
+
 func writeResponsesSSEChunk(w io.Writer, chunk []byte) {
 	if w == nil || len(chunk) == 0 {
 		return
@@ -426,8 +434,12 @@ func (h *OpenAIResponsesAPIHandler) Compact(c *gin.Context) {
 	cliCtx, cliCancel := h.GetContextWithCancel(h, c, context.Background())
 	stopKeepAlive := h.StartNonStreamingKeepAlive(c, cliCtx)
 	resp, upstreamHeaders, errMsg := h.ExecuteWithAuthManager(cliCtx, h.HandlerType(), modelName, rawJSON, "responses/compact")
+	compactRoute := compactRouteValue
+	compactFallback := false
 	if errMsg != nil && shouldFallbackCompactToResponses(errMsg) {
 		resp, upstreamHeaders, errMsg = h.ExecuteWithAuthManager(cliCtx, h.HandlerType(), modelName, rawJSON, "")
+		compactRoute = responsesRouteValue
+		compactFallback = true
 	}
 	stopKeepAlive()
 	if errMsg != nil {
@@ -435,7 +447,12 @@ func (h *OpenAIResponsesAPIHandler) Compact(c *gin.Context) {
 		cliCancel(errMsg.Error)
 		return
 	}
+	resp = annotateCompactRoute(resp, compactRoute, compactFallback)
 	handlers.WriteUpstreamHeaders(c.Writer.Header(), upstreamHeaders)
+	c.Header(compactRouteHeader, compactRoute)
+	if compactFallback {
+		c.Header(compactFallbackHeader, compactFallbackFromValue)
+	}
 	_, _ = c.Writer.Write(resp)
 	cliCancel()
 }
@@ -454,7 +471,25 @@ func shouldFallbackCompactToResponses(errMsg *interfaces.ErrorMessage) bool {
 	statusText := strings.ToLower(strings.TrimSpace(errMsg.Error.Error()))
 	return status == http.StatusNotImplemented ||
 		status == http.StatusMethodNotAllowed ||
+		(status == http.StatusForbidden && strings.Contains(statusText, "image generation is not enabled")) ||
 		(status == http.StatusNotFound && strings.Contains(statusText, "compact"))
+}
+
+func annotateCompactRoute(resp []byte, route string, fallback bool) []byte {
+	if len(resp) == 0 || !gjson.ValidBytes(resp) {
+		return resp
+	}
+	updated, err := sjson.SetBytes(resp, "cliproxyapi.compact_route", route)
+	if err != nil {
+		return resp
+	}
+	if fallback {
+		updated, err = sjson.SetBytes(updated, "cliproxyapi.compact_fallback_from", compactFallbackFromValue)
+		if err != nil {
+			return resp
+		}
+	}
+	return updated
 }
 
 // handleNonStreamingResponse handles non-streaming chat completion responses

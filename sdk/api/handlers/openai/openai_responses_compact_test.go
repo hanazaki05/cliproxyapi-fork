@@ -11,11 +11,13 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/klauspost/compress/zstd"
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/interfaces"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/registry"
 	"github.com/router-for-me/CLIProxyAPI/v7/sdk/api/handlers"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 	coreexecutor "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/executor"
 	sdkconfig "github.com/router-for-me/CLIProxyAPI/v7/sdk/config"
+	"github.com/tidwall/gjson"
 )
 
 type compactCaptureExecutor struct {
@@ -98,6 +100,16 @@ func (e *compactFallbackExecutor) HttpRequest(context.Context, *coreauth.Auth, *
 	return nil, errors.New("not implemented")
 }
 
+func assertCompactRouteMetadata(t *testing.T, body string, route string, fallbackFrom string) {
+	t.Helper()
+	if got := gjson.Get(body, "cliproxyapi.compact_route").String(); got != route {
+		t.Fatalf("cliproxyapi.compact_route = %q, want %q; body=%s", got, route, body)
+	}
+	if got := gjson.Get(body, "cliproxyapi.compact_fallback_from").String(); got != fallbackFrom {
+		t.Fatalf("cliproxyapi.compact_fallback_from = %q, want %q; body=%s", got, fallbackFrom, body)
+	}
+}
+
 func TestOpenAIResponsesCompactRejectsStream(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	executor := &compactCaptureExecutor{}
@@ -165,8 +177,19 @@ func TestOpenAIResponsesCompactFallsThroughCredentialsBeforeResponsesFallback(t 
 	if resp.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body=%s", resp.Code, http.StatusOK, resp.Body.String())
 	}
-	if got := strings.TrimSpace(resp.Body.String()); got != `{"auth":"auth-b","alt":"compact"}` {
-		t.Fatalf("body = %s", got)
+	body := resp.Body.String()
+	if got := gjson.Get(body, "auth").String(); got != "auth-b" {
+		t.Fatalf("auth = %q, want auth-b; body=%s", got, body)
+	}
+	if got := gjson.Get(body, "alt").String(); got != "compact" {
+		t.Fatalf("alt = %q, want compact; body=%s", got, body)
+	}
+	assertCompactRouteMetadata(t, body, compactRouteValue, "")
+	if got := resp.Header().Get(compactRouteHeader); got != compactRouteValue {
+		t.Fatalf("%s = %q, want %q", compactRouteHeader, got, compactRouteValue)
+	}
+	if got := resp.Header().Get(compactFallbackHeader); got != "" {
+		t.Fatalf("%s = %q, want empty", compactFallbackHeader, got)
 	}
 	want := []string{"auth-a:responses/compact", "auth-b:responses/compact"}
 	if len(executor.calls) != len(want) {
@@ -207,8 +230,19 @@ func TestOpenAIResponsesCompactFallsBackToResponsesAfterCompactCredentialsExhaus
 	if resp.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d; body=%s", resp.Code, http.StatusOK, resp.Body.String())
 	}
-	if got := strings.TrimSpace(resp.Body.String()); got != `{"auth":"auth-a","alt":"responses"}` {
-		t.Fatalf("body = %s", got)
+	body := resp.Body.String()
+	if got := gjson.Get(body, "auth").String(); got != "auth-a" {
+		t.Fatalf("auth = %q, want auth-a; body=%s", got, body)
+	}
+	if got := gjson.Get(body, "alt").String(); got != "responses" {
+		t.Fatalf("alt = %q, want responses; body=%s", got, body)
+	}
+	assertCompactRouteMetadata(t, body, responsesRouteValue, compactFallbackFromValue)
+	if got := resp.Header().Get(compactRouteHeader); got != responsesRouteValue {
+		t.Fatalf("%s = %q, want %q", compactRouteHeader, got, responsesRouteValue)
+	}
+	if got := resp.Header().Get(compactFallbackHeader); got != compactFallbackFromValue {
+		t.Fatalf("%s = %q, want %q", compactFallbackHeader, got, compactFallbackFromValue)
 	}
 	want := []string{"auth-a:responses/compact", "auth-a:"}
 	if len(executor.calls) != len(want) {
@@ -218,6 +252,16 @@ func TestOpenAIResponsesCompactFallsBackToResponsesAfterCompactCredentialsExhaus
 		if executor.calls[i] != want[i] {
 			t.Fatalf("call %d = %q, want %q; calls=%v", i, executor.calls[i], want[i], executor.calls)
 		}
+	}
+}
+
+func TestOpenAIResponsesCompactFallsBackOnImageGenerationForbidden(t *testing.T) {
+	errMsg := &interfaces.ErrorMessage{
+		StatusCode: http.StatusForbidden,
+		Error:      errors.New("Image generation is not enabled for this group"),
+	}
+	if !shouldFallbackCompactToResponses(errMsg) {
+		t.Fatal("expected image generation forbidden compact error to trigger responses fallback")
 	}
 }
 
@@ -255,8 +299,16 @@ func TestOpenAIResponsesCompactExecute(t *testing.T) {
 	if executor.sourceFormat != "openai-response" {
 		t.Fatalf("source format = %q, want %q", executor.sourceFormat, "openai-response")
 	}
-	if strings.TrimSpace(resp.Body.String()) != `{"ok":true}` {
-		t.Fatalf("body = %s", resp.Body.String())
+	body := resp.Body.String()
+	if !gjson.Get(body, "ok").Bool() {
+		t.Fatalf("ok = false; body=%s", body)
+	}
+	assertCompactRouteMetadata(t, body, compactRouteValue, "")
+	if got := resp.Header().Get(compactRouteHeader); got != compactRouteValue {
+		t.Fatalf("%s = %q, want %q", compactRouteHeader, got, compactRouteValue)
+	}
+	if got := resp.Header().Get(compactFallbackHeader); got != "" {
+		t.Fatalf("%s = %q, want empty", compactFallbackHeader, got)
 	}
 }
 
@@ -307,7 +359,15 @@ func TestOpenAIResponsesCompactDecodesZstdRequestBody(t *testing.T) {
 	if executor.alt != "responses/compact" {
 		t.Fatalf("alt = %q, want %q", executor.alt, "responses/compact")
 	}
-	if strings.TrimSpace(resp.Body.String()) != `{"ok":true}` {
-		t.Fatalf("body = %s", resp.Body.String())
+	body := resp.Body.String()
+	if !gjson.Get(body, "ok").Bool() {
+		t.Fatalf("ok = false; body=%s", body)
+	}
+	assertCompactRouteMetadata(t, body, compactRouteValue, "")
+	if got := resp.Header().Get(compactRouteHeader); got != compactRouteValue {
+		t.Fatalf("%s = %q, want %q", compactRouteHeader, got, compactRouteValue)
+	}
+	if got := resp.Header().Get(compactFallbackHeader); got != "" {
+		t.Fatalf("%s = %q, want empty", compactFallbackHeader, got)
 	}
 }
