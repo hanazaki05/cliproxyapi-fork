@@ -73,6 +73,8 @@ type Auth struct {
 	Attributes map[string]string `json:"attributes,omitempty"`
 	// Metadata stores runtime mutable provider state (e.g. tokens, cookies).
 	Metadata map[string]any `json:"metadata,omitempty"`
+	// Payload stores credential-scoped request payload rules.
+	Payload any `json:"payload,omitempty"`
 	// Quota captures recent quota information for load balancers.
 	Quota QuotaState `json:"quota"`
 	// LastError stores the last failure encountered while executing or refreshing.
@@ -233,6 +235,7 @@ func (a *Auth) Clone() *Auth {
 			copyAuth.Metadata[key] = value
 		}
 	}
+	copyAuth.Payload = a.Payload
 	if len(a.ModelStates) > 0 {
 		copyAuth.ModelStates = make(map[string]*ModelState, len(a.ModelStates))
 		for key, state := range a.ModelStates {

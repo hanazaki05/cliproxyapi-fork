@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/router-for-me/CLIProxyAPI/v7/internal/config"
 	"github.com/router-for-me/CLIProxyAPI/v7/internal/watcher/diff"
 	coreauth "github.com/router-for-me/CLIProxyAPI/v7/sdk/cliproxy/auth"
 )
@@ -64,6 +65,7 @@ func (s *ConfigSynthesizer) synthesizeGeminiKeys(ctx *SynthesisContext) []*corea
 		if entry.DisableCooling {
 			metadata["disable_cooling"] = true
 		}
+		payload := payloadOrNil(entry.Payload)
 		if entry.Priority != 0 {
 			attrs["priority"] = strconv.Itoa(entry.Priority)
 		}
@@ -83,6 +85,7 @@ func (s *ConfigSynthesizer) synthesizeGeminiKeys(ctx *SynthesisContext) []*corea
 			ProxyURL:   proxyURL,
 			Attributes: attrs,
 			Metadata:   metadata,
+			Payload:    payload,
 			CreatedAt:  now,
 			UpdatedAt:  now,
 		}
@@ -119,6 +122,7 @@ func (s *ConfigSynthesizer) synthesizeClaudeKeys(ctx *SynthesisContext) []*corea
 		if ck.DisableCooling {
 			metadata["disable_cooling"] = true
 		}
+		payload := payloadOrNil(ck.Payload)
 		if ck.Priority != 0 {
 			attrs["priority"] = strconv.Itoa(ck.Priority)
 		}
@@ -139,6 +143,7 @@ func (s *ConfigSynthesizer) synthesizeClaudeKeys(ctx *SynthesisContext) []*corea
 			ProxyURL:   proxyURL,
 			Attributes: attrs,
 			Metadata:   metadata,
+			Payload:    payload,
 			CreatedAt:  now,
 			UpdatedAt:  now,
 		}
@@ -174,6 +179,7 @@ func (s *ConfigSynthesizer) synthesizeCodexKeys(ctx *SynthesisContext) []*coreau
 		if ck.DisableCooling {
 			metadata["disable_cooling"] = true
 		}
+		payload := payloadOrNil(ck.Payload)
 		if ck.Priority != 0 {
 			attrs["priority"] = strconv.Itoa(ck.Priority)
 		}
@@ -197,6 +203,7 @@ func (s *ConfigSynthesizer) synthesizeCodexKeys(ctx *SynthesisContext) []*coreau
 			ProxyURL:   proxyURL,
 			Attributes: attrs,
 			Metadata:   metadata,
+			Payload:    payload,
 			CreatedAt:  now,
 			UpdatedAt:  now,
 		}
@@ -228,6 +235,7 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 		}
 		base := strings.TrimSpace(compat.BaseURL)
 		disableCooling := compat.DisableCooling
+		providerPayload := payloadOrNil(compat.Payload)
 
 		// Handle new APIKeyEntries format (preferred)
 		createdEntries := 0
@@ -247,6 +255,7 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 			if disableCooling {
 				metadata["disable_cooling"] = true
 			}
+			payload := mergePayloadConfigs(providerPayload, payloadOrNil(entry.Payload))
 			if compat.Priority != 0 {
 				attrs["priority"] = strconv.Itoa(compat.Priority)
 			}
@@ -266,6 +275,7 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 				ProxyURL:   proxyURL,
 				Attributes: attrs,
 				Metadata:   metadata,
+				Payload:    payload,
 				CreatedAt:  now,
 				UpdatedAt:  now,
 			}
@@ -289,6 +299,7 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 			if disableCooling {
 				metadata["disable_cooling"] = true
 			}
+			payload := providerPayload
 			if compat.Priority != 0 {
 				attrs["priority"] = strconv.Itoa(compat.Priority)
 			}
@@ -304,6 +315,7 @@ func (s *ConfigSynthesizer) synthesizeOpenAICompat(ctx *SynthesisContext) []*cor
 				Status:     coreauth.StatusActive,
 				Attributes: attrs,
 				Metadata:   metadata,
+				Payload:    payload,
 				CreatedAt:  now,
 				UpdatedAt:  now,
 			}
@@ -348,6 +360,7 @@ func (s *ConfigSynthesizer) synthesizeVertexCompat(ctx *SynthesisContext) []*cor
 			attrs["models_hash"] = hash
 		}
 		addConfigHeadersToAttrs(compat.Headers, attrs)
+		payload := payloadOrNil(compat.Payload)
 		a := &coreauth.Auth{
 			ID:         id,
 			Provider:   providerName,
@@ -356,6 +369,7 @@ func (s *ConfigSynthesizer) synthesizeVertexCompat(ctx *SynthesisContext) []*cor
 			Status:     coreauth.StatusActive,
 			ProxyURL:   proxyURL,
 			Attributes: attrs,
+			Payload:    payload,
 			CreatedAt:  now,
 			UpdatedAt:  now,
 		}
@@ -363,4 +377,28 @@ func (s *ConfigSynthesizer) synthesizeVertexCompat(ctx *SynthesisContext) []*cor
 		out = append(out, a)
 	}
 	return out
+}
+
+func payloadOrNil(payload config.PayloadConfig) *config.PayloadConfig {
+	if len(payload.Default) == 0 && len(payload.DefaultRaw) == 0 && len(payload.Override) == 0 && len(payload.OverrideRaw) == 0 && len(payload.Filter) == 0 {
+		return nil
+	}
+	return &payload
+}
+
+func mergePayloadConfigs(base, overlay *config.PayloadConfig) *config.PayloadConfig {
+	if base == nil {
+		return overlay
+	}
+	if overlay == nil {
+		return base
+	}
+	merged := config.PayloadConfig{
+		Default:     append(append([]config.PayloadRule{}, base.Default...), overlay.Default...),
+		DefaultRaw:  append(append([]config.PayloadRule{}, base.DefaultRaw...), overlay.DefaultRaw...),
+		Override:    append(append([]config.PayloadRule{}, base.Override...), overlay.Override...),
+		OverrideRaw: append(append([]config.PayloadRule{}, base.OverrideRaw...), overlay.OverrideRaw...),
+		Filter:      append(append([]config.PayloadFilterRule{}, base.Filter...), overlay.Filter...),
+	}
+	return &merged
 }

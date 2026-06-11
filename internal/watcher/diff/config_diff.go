@@ -141,6 +141,9 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 			if oldExcluded.hash != newExcluded.hash {
 				changes = append(changes, fmt.Sprintf("gemini[%d].excluded-models: updated (%d -> %d entries)", i, oldExcluded.count, newExcluded.count))
 			}
+			if !reflect.DeepEqual(o.Payload, n.Payload) {
+				changes = append(changes, fmt.Sprintf("gemini[%d].payload: updated", i))
+			}
 		}
 	}
 
@@ -175,6 +178,9 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 			newExcluded := SummarizeExcludedModels(n.ExcludedModels)
 			if oldExcluded.hash != newExcluded.hash {
 				changes = append(changes, fmt.Sprintf("claude[%d].excluded-models: updated (%d -> %d entries)", i, oldExcluded.count, newExcluded.count))
+			}
+			if !reflect.DeepEqual(o.Payload, n.Payload) {
+				changes = append(changes, fmt.Sprintf("claude[%d].payload: updated", i))
 			}
 			if o.Cloak != nil && n.Cloak != nil {
 				if strings.TrimSpace(o.Cloak.Mode) != strings.TrimSpace(n.Cloak.Mode) {
@@ -224,6 +230,9 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 			newExcluded := SummarizeExcludedModels(n.ExcludedModels)
 			if oldExcluded.hash != newExcluded.hash {
 				changes = append(changes, fmt.Sprintf("codex[%d].excluded-models: updated (%d -> %d entries)", i, oldExcluded.count, newExcluded.count))
+			}
+			if !reflect.DeepEqual(o.Payload, n.Payload) {
+				changes = append(changes, fmt.Sprintf("codex[%d].payload: updated", i))
 			}
 		}
 	}
@@ -333,6 +342,9 @@ func BuildConfigChangeDetails(oldCfg, newCfg *config.Config) []string {
 			}
 			if !equalStringMap(o.Headers, n.Headers) {
 				changes = append(changes, fmt.Sprintf("vertex[%d].headers: updated", i))
+			}
+			if !reflect.DeepEqual(o.Payload, n.Payload) {
+				changes = append(changes, fmt.Sprintf("vertex[%d].payload: updated", i))
 			}
 		}
 	}

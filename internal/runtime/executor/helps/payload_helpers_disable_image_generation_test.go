@@ -311,3 +311,45 @@ func TestApplyPayloadConfigWithRequest_PayloadConditionsSkipRule(t *testing.T) {
 		})
 	}
 }
+
+func TestApplyAuthScopedPayloadConfigWithRequest_OverridesGlobalPayload(t *testing.T) {
+	cfg := &config.Config{
+		Payload: config.PayloadConfig{
+			Override: []config.PayloadRule{
+				{
+					Models: []config.PayloadModelRule{{Name: "gpt-*", Protocol: "codex"}},
+					Params: map[string]any{"reasoning.effort": "medium"},
+				},
+			},
+		},
+	}
+	authPayload := config.PayloadConfig{
+		Override: []config.PayloadRule{
+			{
+				Models: []config.PayloadModelRule{{Name: "gpt-*", Protocol: "codex"}},
+				Params: map[string]any{"reasoning.effort": "high"},
+			},
+		},
+		Filter: []config.PayloadFilterRule{
+			{
+				Models: []config.PayloadModelRule{{Name: "gpt-*", Protocol: "codex"}},
+				Params: []string{"tools.#(type==\"image_generation\")"},
+			},
+		},
+	}
+	payload := []byte(`{"model":"gpt-5.4","tools":[{"type":"image_generation"},{"type":"function","name":"f"}]}`)
+
+	out := ApplyPayloadConfigWithRequest(cfg, "gpt-5.4", "codex", "responses", "", payload, nil, "", "", nil)
+	out = ApplyAuthScopedPayloadConfigWithRequest(authPayload, "gpt-5.4", "codex", "responses", "", out, nil, "", "", nil)
+
+	if got := gjson.GetBytes(out, "reasoning.effort").String(); got != "high" {
+		t.Fatalf("reasoning.effort = %q, want high; payload=%s", got, out)
+	}
+	tools := gjson.GetBytes(out, "tools").Array()
+	if len(tools) != 1 {
+		t.Fatalf("tools len = %d, want 1; payload=%s", len(tools), out)
+	}
+	if got := tools[0].Get("type").String(); got != "function" {
+		t.Fatalf("remaining tool type = %q, want function; payload=%s", got, out)
+	}
+}

@@ -37,6 +37,9 @@ type VertexCompatKey struct {
 
 	// ExcludedModels lists model IDs that should be excluded for this provider.
 	ExcludedModels []string `yaml:"excluded-models,omitempty" json:"excluded-models,omitempty"`
+
+	// Payload defines credential-scoped payload rules applied after global payload rules.
+	Payload PayloadConfig `yaml:"payload,omitempty" json:"payload,omitempty"`
 }
 
 func (k VertexCompatKey) GetAPIKey() string  { return k.APIKey }

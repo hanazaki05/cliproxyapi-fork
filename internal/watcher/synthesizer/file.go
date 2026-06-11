@@ -117,6 +117,7 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath, id string, data []byte
 
 	// Read per-account excluded models from the OAuth JSON file.
 	perAccountExcluded := extractExcludedModelsFromMetadata(metadata)
+	payload := metadata["payload"]
 
 	a := &coreauth.Auth{
 		ID:       id,
@@ -131,6 +132,7 @@ func synthesizeFileAuths(ctx *SynthesisContext, fullPath, id string, data []byte
 		},
 		ProxyURL:  proxyURL,
 		Metadata:  metadata,
+		Payload:   payload,
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -272,6 +274,7 @@ func SynthesizeGeminiVirtualAuths(primary *coreauth.Auth, metadata map[string]an
 			Metadata:   metadataCopy,
 			ProxyURL:   primary.ProxyURL,
 			Prefix:     primary.Prefix,
+			Payload:    primary.Payload,
 			CreatedAt:  primary.CreatedAt,
 			UpdatedAt:  primary.UpdatedAt,
 			Runtime:    geminicli.NewVirtualCredential(projectID, shared),

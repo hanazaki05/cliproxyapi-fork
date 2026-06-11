@@ -451,6 +451,9 @@ type ClaudeKey struct {
 	// DisableCooling disables auth/model cooldown scheduling for this credential when true.
 	DisableCooling bool `yaml:"disable-cooling,omitempty" json:"disable-cooling,omitempty"`
 
+	// Payload defines credential-scoped payload rules applied after global payload rules.
+	Payload PayloadConfig `yaml:"payload,omitempty" json:"payload,omitempty"`
+
 	// Cloak configures request cloaking for non-Claude-Code clients.
 	Cloak *CloakConfig `yaml:"cloak,omitempty" json:"cloak,omitempty"`
 
@@ -509,6 +512,9 @@ type CodexKey struct {
 
 	// DisableCooling disables auth/model cooldown scheduling for this credential when true.
 	DisableCooling bool `yaml:"disable-cooling,omitempty" json:"disable-cooling,omitempty"`
+
+	// Payload defines credential-scoped payload rules applied after global payload rules.
+	Payload PayloadConfig `yaml:"payload,omitempty" json:"payload,omitempty"`
 }
 
 func (k CodexKey) GetAPIKey() string  { return k.APIKey }
@@ -556,6 +562,9 @@ type GeminiKey struct {
 
 	// DisableCooling disables auth/model cooldown scheduling for this credential when true.
 	DisableCooling bool `yaml:"disable-cooling,omitempty" json:"disable-cooling,omitempty"`
+
+	// Payload defines credential-scoped payload rules applied after global payload rules.
+	Payload PayloadConfig `yaml:"payload,omitempty" json:"payload,omitempty"`
 }
 
 func (k GeminiKey) GetAPIKey() string  { return k.APIKey }
@@ -603,6 +612,10 @@ type OpenAICompatibility struct {
 
 	// DisableCooling disables auth/model cooldown scheduling for this provider when true.
 	DisableCooling bool `yaml:"disable-cooling,omitempty" json:"disable-cooling,omitempty"`
+
+	// Payload defines provider-scoped payload rules applied to all API key entries
+	// after global payload rules. Per-key payload rules run after these rules.
+	Payload PayloadConfig `yaml:"payload,omitempty" json:"payload,omitempty"`
 }
 
 // OpenAICompatibilityAPIKey represents an API key configuration with optional proxy setting.
@@ -612,6 +625,9 @@ type OpenAICompatibilityAPIKey struct {
 
 	// ProxyURL overrides the global proxy setting for this API key if provided.
 	ProxyURL string `yaml:"proxy-url,omitempty" json:"proxy-url,omitempty"`
+
+	// Payload defines API-key-scoped payload rules applied after provider payload rules.
+	Payload PayloadConfig `yaml:"payload,omitempty" json:"payload,omitempty"`
 }
 
 // OpenAICompatibilityModel represents a model configuration for OpenAI compatibility,

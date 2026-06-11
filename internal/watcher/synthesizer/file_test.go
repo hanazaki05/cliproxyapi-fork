@@ -527,6 +527,50 @@ func TestFileSynthesizer_Synthesize_OAuthExcludedModelsMerged(t *testing.T) {
 	}
 }
 
+func TestFileSynthesizer_Synthesize_PayloadPassthrough(t *testing.T) {
+	tempDir := t.TempDir()
+	authData := map[string]any{
+		"type": "claude",
+		"payload": map[string]any{
+			"override": []any{
+				map[string]any{
+					"models": []any{map[string]any{"name": "claude-*", "protocol": "claude"}},
+					"params": map[string]any{"max_tokens": 1024},
+				},
+			},
+		},
+	}
+	data, _ := json.Marshal(authData)
+	errWriteFile := os.WriteFile(filepath.Join(tempDir, "auth.json"), data, 0644)
+	if errWriteFile != nil {
+		t.Fatalf("failed to write auth file: %v", errWriteFile)
+	}
+
+	synth := NewFileSynthesizer()
+	ctx := &SynthesisContext{
+		Config:      &config.Config{},
+		AuthDir:     tempDir,
+		Now:         time.Now(),
+		IDGenerator: NewStableIDGenerator(),
+	}
+
+	auths, errSynthesize := synth.Synthesize(ctx)
+	if errSynthesize != nil {
+		t.Fatalf("unexpected error: %v", errSynthesize)
+	}
+	if len(auths) != 1 {
+		t.Fatalf("expected 1 auth, got %d", len(auths))
+	}
+	payload, ok := auths[0].Payload.(map[string]any)
+	if !ok {
+		t.Fatalf("payload type = %T, want map[string]any", auths[0].Payload)
+	}
+	override, ok := payload["override"].([]any)
+	if !ok || len(override) != 1 {
+		t.Fatalf("payload override = %#v, want one rule", payload["override"])
+	}
+}
+
 func TestSynthesizeGeminiVirtualAuths_NilInputs(t *testing.T) {
 	now := time.Now()
 

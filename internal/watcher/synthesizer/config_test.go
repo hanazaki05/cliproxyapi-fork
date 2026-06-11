@@ -1,6 +1,7 @@
 package synthesizer
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -285,6 +286,46 @@ func TestConfigSynthesizer_CodexKeys(t *testing.T) {
 	}
 	if v, ok := auths[0].Metadata["disable_cooling"].(bool); !ok || !v {
 		t.Errorf("expected disable_cooling=true, got %v", auths[0].Metadata["disable_cooling"])
+	}
+}
+
+func TestConfigSynthesizer_CodexKeyPayload(t *testing.T) {
+	payload := config.PayloadConfig{
+		Override: []config.PayloadRule{
+			{
+				Models: []config.PayloadModelRule{{Name: "gpt-*", Protocol: "codex"}},
+				Params: map[string]any{"reasoning.effort": "high"},
+			},
+		},
+	}
+	synth := NewConfigSynthesizer()
+	ctx := &SynthesisContext{
+		Config: &config.Config{
+			CodexKey: []config.CodexKey{
+				{
+					APIKey:  "codex-key-123",
+					BaseURL: "https://api.openai.com",
+					Payload: payload,
+				},
+			},
+		},
+		Now:         time.Now(),
+		IDGenerator: NewStableIDGenerator(),
+	}
+
+	auths, err := synth.Synthesize(ctx)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(auths) != 1 {
+		t.Fatalf("expected 1 auth, got %d", len(auths))
+	}
+	got, ok := auths[0].Payload.(*config.PayloadConfig)
+	if !ok {
+		t.Fatalf("auth payload type = %T, want *config.PayloadConfig", auths[0].Payload)
+	}
+	if !reflect.DeepEqual(*got, payload) {
+		t.Fatalf("auth payload = %#v, want %#v", *got, payload)
 	}
 }
 

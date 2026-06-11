@@ -457,3 +457,21 @@ nonstream-keepalive-interval: 0
 #       params: # JSON paths (gjson/sjson syntax) to remove from the payload
 #         - "generationConfig.thinkingConfig.thinkingBudget"
 #         - "generationConfig.responseJsonSchema"
+
+# Payload can also be attached to one credential/channel. Credential-scoped
+# payload rules run after the global payload rules above, so they can override
+# or remove fields for only that key. The same payload block is supported under
+# claude-api-key, codex-api-key, gemini-api-key, vertex-api-key, and under
+# openai-compatibility.api-key-entries[]. OAuth/file auth JSON files can also
+# include a top-level "payload" object with the same shape.
+# claude-api-key:
+#   - api-key: "sk-ant-..."
+#     payload:
+#       filter:
+#         - models:
+#             - name: "claude-*"
+#               protocol: "claude"
+#               match:
+#                 - "tools.#(type==\"image_generation\").type": "image_generation"
+#           params:
+#             - "tools.#(type==\"image_generation\")"
