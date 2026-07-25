@@ -33,11 +33,9 @@ func ApplyPayloadConfigWithRequest(cfg *config.Config, model, protocol, fromProt
 
 	// Apply disable-image-generation filtering before payload rules so config payload
 	// overrides can explicitly re-enable image_generation when desired.
-	if cfg.DisableImageGeneration != config.DisableImageGenerationOff {
-		if cfg.DisableImageGeneration != config.DisableImageGenerationChat || !isImagesEndpointRequestPath(requestPath) {
-			out = removeToolTypeFromPayloadWithRoot(out, root, "image_generation")
-			out = removeToolChoiceFromPayloadWithRoot(out, root, "image_generation")
-		}
+	if shouldStripImageGeneration(cfg.DisableImageGeneration, requestPath) {
+		out = removeToolTypeFromPayloadWithRoot(out, root, "image_generation")
+		out = removeToolChoiceFromPayloadWithRoot(out, root, "image_generation")
 	}
 
 	rules := cfg.Payload
@@ -146,11 +144,7 @@ func applyPayloadRules(out []byte, rules config.PayloadConfig, model, protocol, 
 				continue
 			}
 			for _, resolvedPath := range resolvePayloadRulePaths(out, fullPath) {
-				updated, errSet := sjson.SetBytes(out, resolvedPath, value)
-				if errSet != nil {
-					continue
-				}
-				out = updated
+				out = setPayloadValueIfDifferent(out, resolvedPath, value)
 			}
 		}
 	}
@@ -170,11 +164,7 @@ func applyPayloadRules(out []byte, rules config.PayloadConfig, model, protocol, 
 				continue
 			}
 			for _, resolvedPath := range resolvePayloadRulePaths(out, fullPath) {
-				updated, errSet := sjson.SetRawBytes(out, resolvedPath, rawValue)
-				if errSet != nil {
-					continue
-				}
-				out = updated
+				out = SetRawIfDifferent(out, resolvedPath, rawValue)
 			}
 		}
 	}
@@ -201,6 +191,46 @@ func applyPayloadRules(out []byte, rules config.PayloadConfig, model, protocol, 
 		}
 	}
 	return out
+}
+
+func setPayloadValueIfDifferent(payload []byte, path string, value any) []byte {
+	current := gjson.GetBytes(payload, path)
+	switch typed := value.(type) {
+	case string:
+		if current.Type == gjson.String && current.String() == typed {
+			return payload
+		}
+	case bool:
+		if (typed && current.Type == gjson.True) || (!typed && current.Type == gjson.False) {
+			return payload
+		}
+	case nil:
+		if current.Raw == "null" {
+			return payload
+		}
+	default:
+		expectedJSON, errSet := sjson.SetBytes([]byte(`{}`), "value", value)
+		if errSet != nil {
+			return payload
+		}
+		expected := gjson.GetBytes(expectedJSON, "value")
+		if expected.Raw == "" {
+			return payload
+		}
+		if len(current.Indexes) == 0 && current.Raw == expected.Raw {
+			return payload
+		}
+		updated, errSet := sjson.SetRawBytes(payload, path, []byte(expected.Raw))
+		if errSet != nil {
+			return payload
+		}
+		return updated
+	}
+	updated, errSet := sjson.SetBytes(payload, path, value)
+	if errSet != nil {
+		return payload
+	}
+	return updated
 }
 
 func payloadConfigFromAny(value any) (config.PayloadConfig, bool) {
@@ -259,6 +289,22 @@ func isImagesEndpointRequestPath(path string) bool {
 	return false
 }
 
+// shouldStripImageGeneration reports whether the built-in image_generation tool must be
+// removed from the outbound payload for the given mode and request path.
+//   - All: strip on every endpoint.
+//   - Chat: strip only on non-images endpoints; keep it on /v1/images/* endpoints.
+//   - Off / Passthrough: never strip. Off injects the tool elsewhere; Passthrough forwards
+//     the client payload untouched.
+func shouldStripImageGeneration(mode config.DisableImageGenerationMode, requestPath string) bool {
+	switch mode {
+	case config.DisableImageGenerationAll:
+		return true
+	case config.DisableImageGenerationChat:
+		return !isImagesEndpointRequestPath(requestPath)
+	default:
+		return false
+	}
+}
 func payloadModelRulesMatch(rules []config.PayloadModelRule, protocol string, fromProtocol string, headers http.Header, payload []byte, root string, models []string) bool {
 	if len(rules) == 0 || len(models) == 0 {
 		return false
