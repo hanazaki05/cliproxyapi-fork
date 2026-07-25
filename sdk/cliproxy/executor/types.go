@@ -31,6 +31,9 @@ const ServiceTierMetadataKey = "service_tier"
 // Missing or true means generation is enabled; only an explicit false disables generation.
 const GenerateMetadataKey = "generate"
 
+// StreamBootstrapTimeoutMetadataKey stores the first-payload timeout for streaming attempts.
+const StreamBootstrapTimeoutMetadataKey = "stream_bootstrap_timeout"
+
 const (
 	// PinnedAuthMetadataKey locks execution to a specific auth ID.
 	PinnedAuthMetadataKey = "pinned_auth_id"

@@ -272,6 +272,19 @@ func StreamingBootstrapRetries(cfg *config.SDKConfig) int {
 	return retries
 }
 
+// StreamingBootstrapTimeout returns how long a streaming attempt may wait for its first payload.
+// Returning 0 disables the timeout.
+func StreamingBootstrapTimeout(cfg *config.SDKConfig) time.Duration {
+	seconds := 0
+	if cfg != nil {
+		seconds = cfg.Streaming.BootstrapTimeoutSeconds
+	}
+	if seconds <= 0 {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
+}
+
 // PassthroughHeadersEnabled returns whether upstream response headers should be forwarded to clients.
 // Default is false.
 func PassthroughHeadersEnabled(cfg *config.SDKConfig) bool {
@@ -1193,6 +1206,9 @@ func (h *BaseAPIHandler) executeStreamWithAuthManagerFormats(ctx context.Context
 	setReasoningEffortMetadata(reqMeta, entryProtocol, normalizedModel, rawJSON)
 	setServiceTierMetadata(reqMeta, rawJSON)
 	setGenerateMetadata(reqMeta, rawJSON)
+	if timeout := StreamingBootstrapTimeout(h.Cfg); timeout > 0 {
+		reqMeta[coreexecutor.StreamBootstrapTimeoutMetadataKey] = timeout
+	}
 	payload := rawJSON
 	if len(payload) == 0 {
 		payload = nil

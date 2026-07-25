@@ -236,6 +236,11 @@ type authAwareStreamExecutor struct {
 	authIDs []string
 }
 
+type hangingFirstAuthStreamExecutor struct {
+	mu      sync.Mutex
+	authIDs []string
+}
+
 type invalidJSONStreamExecutor struct{}
 
 type splitResponsesEventStreamExecutor struct{}
@@ -362,6 +367,67 @@ func (e *authAwareStreamExecutor) Calls() int {
 }
 
 func (e *authAwareStreamExecutor) AuthIDs() []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make([]string, len(e.authIDs))
+	copy(out, e.authIDs)
+	return out
+}
+
+func (e *hangingFirstAuthStreamExecutor) Identifier() string { return "codex" }
+
+func (e *hangingFirstAuthStreamExecutor) Execute(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (coreexecutor.Response, error) {
+	return coreexecutor.Response{}, &coreauth.Error{Code: "not_implemented", Message: "Execute not implemented"}
+}
+
+func (e *hangingFirstAuthStreamExecutor) ExecuteStream(ctx context.Context, auth *coreauth.Auth, req coreexecutor.Request, opts coreexecutor.Options) (*coreexecutor.StreamResult, error) {
+	_ = req
+	_ = opts
+	authID := ""
+	if auth != nil {
+		authID = auth.ID
+	}
+	e.mu.Lock()
+	e.authIDs = append(e.authIDs, authID)
+	e.mu.Unlock()
+
+	ch := make(chan coreexecutor.StreamChunk, 1)
+	if authID == "auth1" {
+		go func() {
+			<-ctx.Done()
+			close(ch)
+		}()
+		return &coreexecutor.StreamResult{
+			Headers: http.Header{"X-Upstream-Auth": {"auth1"}},
+			Chunks:  ch,
+		}, nil
+	}
+
+	ch <- coreexecutor.StreamChunk{Payload: []byte("ok")}
+	close(ch)
+	return &coreexecutor.StreamResult{
+		Headers: http.Header{"X-Upstream-Auth": {authID}},
+		Chunks:  ch,
+	}, nil
+}
+
+func (e *hangingFirstAuthStreamExecutor) Refresh(ctx context.Context, auth *coreauth.Auth) (*coreauth.Auth, error) {
+	return auth, nil
+}
+
+func (e *hangingFirstAuthStreamExecutor) CountTokens(context.Context, *coreauth.Auth, coreexecutor.Request, coreexecutor.Options) (coreexecutor.Response, error) {
+	return coreexecutor.Response{}, &coreauth.Error{Code: "not_implemented", Message: "CountTokens not implemented"}
+}
+
+func (e *hangingFirstAuthStreamExecutor) HttpRequest(ctx context.Context, auth *coreauth.Auth, req *http.Request) (*http.Response, error) {
+	return nil, &coreauth.Error{
+		Code:       "not_implemented",
+		Message:    "HttpRequest not implemented",
+		HTTPStatus: http.StatusNotImplemented,
+	}
+}
+
+func (e *hangingFirstAuthStreamExecutor) AuthIDs() []string {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	out := make([]string, len(e.authIDs))
@@ -754,6 +820,124 @@ func TestExecuteStreamWithAuthManager_HomeBootstrapFailureDoesNotRedispatch(t *t
 	}
 	if got := releaseSink.Notifications(); len(got) != 1 || got[0] != wantRelease {
 		t.Fatalf("release notifications after drain = %#v, want [%#v]", got, wantRelease)
+	}
+}
+
+func TestExecuteStreamWithAuthManager_BootstrapTimeoutFallsBackBeforeFirstByte(t *testing.T) {
+	executor := &hangingFirstAuthStreamExecutor{}
+	manager := coreauth.NewManager(nil, &coreauth.FillFirstSelector{}, nil)
+	manager.RegisterExecutor(executor)
+
+	auth1 := &coreauth.Auth{
+		ID:       "auth1",
+		Provider: "codex",
+		Status:   coreauth.StatusActive,
+		Metadata: map[string]any{"email": "test1@example.com"},
+	}
+	if _, err := manager.Register(context.Background(), auth1); err != nil {
+		t.Fatalf("manager.Register(auth1): %v", err)
+	}
+
+	auth2 := &coreauth.Auth{
+		ID:       "auth2",
+		Provider: "codex",
+		Status:   coreauth.StatusActive,
+		Metadata: map[string]any{"email": "test2@example.com"},
+	}
+	if _, err := manager.Register(context.Background(), auth2); err != nil {
+		t.Fatalf("manager.Register(auth2): %v", err)
+	}
+
+	registry.GetGlobalRegistry().RegisterClient(auth1.ID, auth1.Provider, []*registry.ModelInfo{{ID: "test-model"}})
+	registry.GetGlobalRegistry().RegisterClient(auth2.ID, auth2.Provider, []*registry.ModelInfo{{ID: "test-model"}})
+	t.Cleanup(func() {
+		registry.GetGlobalRegistry().UnregisterClient(auth1.ID)
+		registry.GetGlobalRegistry().UnregisterClient(auth2.ID)
+	})
+
+	handler := NewBaseAPIHandlers(&sdkconfig.SDKConfig{
+		PassthroughHeaders: true,
+		Streaming: sdkconfig.StreamingConfig{
+			BootstrapRetries:        1,
+			BootstrapTimeoutSeconds: 1,
+		},
+	}, manager)
+	dataChan, upstreamHeaders, errChan := handler.ExecuteStreamWithAuthManager(context.Background(), "openai", "test-model", []byte(`{"model":"test-model"}`), "")
+	if dataChan == nil || errChan == nil {
+		t.Fatalf("expected non-nil channels")
+	}
+
+	var got []byte
+	for chunk := range dataChan {
+		got = append(got, chunk...)
+	}
+	for msg := range errChan {
+		if msg != nil {
+			t.Fatalf("unexpected error: %+v", msg)
+		}
+	}
+
+	if string(got) != "ok" {
+		t.Fatalf("expected payload ok after timeout fallback, got %q", string(got))
+	}
+	if gotHeader := upstreamHeaders.Get("X-Upstream-Auth"); gotHeader != "auth2" {
+		t.Fatalf("expected retry upstream header from auth2, got %q", gotHeader)
+	}
+	if gotAuths := executor.AuthIDs(); len(gotAuths) != 2 || gotAuths[0] != "auth1" || gotAuths[1] != "auth2" {
+		t.Fatalf("auth attempts = %v, want [auth1 auth2]", gotAuths)
+	}
+}
+
+func TestManagerExecuteStream_BootstrapTimeoutReturns408WhenRetriesDisabled(t *testing.T) {
+	executor := &hangingFirstAuthStreamExecutor{}
+	manager := coreauth.NewManager(nil, nil, nil)
+	manager.RegisterExecutor(executor)
+
+	auth := &coreauth.Auth{
+		ID:       "auth1",
+		Provider: "codex",
+		Status:   coreauth.StatusActive,
+	}
+	if _, err := manager.Register(context.Background(), auth); err != nil {
+		t.Fatalf("manager.Register(auth): %v", err)
+	}
+
+	registry.GetGlobalRegistry().RegisterClient(auth.ID, auth.Provider, []*registry.ModelInfo{{ID: "test-model"}})
+	t.Cleanup(func() {
+		registry.GetGlobalRegistry().UnregisterClient(auth.ID)
+	})
+
+	streamResult, err := manager.ExecuteStream(context.Background(), []string{"codex"}, coreexecutor.Request{Model: "test-model"}, coreexecutor.Options{
+		Stream: true,
+		Metadata: map[string]any{
+			coreexecutor.StreamBootstrapTimeoutMetadataKey: 10 * time.Millisecond,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ExecuteStream returned setup error: %v", err)
+	}
+	if streamResult == nil {
+		t.Fatalf("expected stream result with terminal timeout error")
+	}
+
+	var gotErr error
+	for chunk := range streamResult.Chunks {
+		if chunk.Err != nil {
+			gotErr = chunk.Err
+		}
+	}
+	if gotErr == nil {
+		t.Fatalf("expected timeout error")
+	}
+	statusErr, ok := gotErr.(interface{ StatusCode() int })
+	if !ok {
+		t.Fatalf("timeout error does not expose status: %T", gotErr)
+	}
+	if statusErr.StatusCode() != http.StatusRequestTimeout {
+		t.Fatalf("status = %d, want %d", statusErr.StatusCode(), http.StatusRequestTimeout)
+	}
+	if gotAuths := executor.AuthIDs(); len(gotAuths) != 1 || gotAuths[0] != "auth1" {
+		t.Fatalf("auth attempts = %v, want [auth1]", gotAuths)
 	}
 }
 
